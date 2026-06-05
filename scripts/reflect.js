@@ -17,6 +17,7 @@ const RUN_LOG_PATH = path.join(LOG_DIR, 'runs.jsonl');
 const DEFAULT_CONFIG = {
   enabled: true,
   min_conversations: 50,
+  max_conversations: 300,
   identity_file: '~/zylos/memory/identity.md',
   c4_db: '~/zylos/comm-bridge/c4.db',
   c4_fetch_script: '~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js'
@@ -178,8 +179,12 @@ function commandFetch() {
   }
 
   const latestId = getLatestConversationId(c4DbPath);
-  const beginId = state.last_processed_id + 1;
+  let beginId = state.last_processed_id + 1;
   const endId = latestId;
+  const maxConversations = Number(config.max_conversations ?? DEFAULT_CONFIG.max_conversations);
+  if (Number.isSafeInteger(maxConversations) && maxConversations > 0) {
+    beginId = Math.max(beginId, endId - maxConversations + 1);
+  }
   const count = getConversationCount(c4DbPath, beginId, endId);
   const minConversations = Number(config.min_conversations ?? DEFAULT_CONFIG.min_conversations);
 

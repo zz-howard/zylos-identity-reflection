@@ -118,6 +118,25 @@ test('fetch returns ready envelope with transcript at threshold', () => {
   assert.match(result.conversations, /--begin 1 --end 2/);
 });
 
+test('fetch caps window to max_conversations on first run', () => {
+  const dir = tmpDir();
+  const dataDir = path.join(dir, 'data');
+  const rows = Array.from({ length: 10 }, (_, i) => ({
+    direction: 'in', channel: 'telegram', endpoint: '1', content: `msg${i}`
+  }));
+  const dbPath = createC4Db(dir, rows);
+  const fetchPath = createFakeFetch(dir);
+  writeConfig(dataDir, { min_conversations: 2, max_conversations: 5, c4_db: dbPath, c4_fetch_script: fetchPath });
+
+  const result = JSON.parse(runNode(REFLECT, ['fetch'], { ZYLOS_DATA_DIR: dataDir }));
+
+  assert.equal(result.status, 'ready');
+  assert.equal(result.begin_id, 6);
+  assert.equal(result.end_id, 10);
+  assert.equal(result.count, 5);
+  assert.match(result.conversations, /--begin 6 --end 10/);
+});
+
 test('commit skip records observation without advancing processed cursor', () => {
   const dir = tmpDir();
   const dataDir = path.join(dir, 'data');
