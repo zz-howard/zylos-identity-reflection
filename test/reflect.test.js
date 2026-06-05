@@ -54,7 +54,12 @@ function createC4Db(dir, rows) {
     delivery_action TEXT
   );`);
   for (const row of rows) {
-    runSqlite(dbPath, `INSERT INTO conversations (direction, channel, endpoint_id, content) VALUES ('${row.direction}', '${row.channel}', '${row.endpoint}', '${row.content}');`);
+    const idClause = row.id != null ? `${row.id}, ` : '';
+    const cols = row.id != null ? 'id, direction, channel, endpoint_id, content' : 'direction, channel, endpoint_id, content';
+    const vals = row.id != null
+      ? `${row.id}, '${row.direction}', '${row.channel}', '${row.endpoint}', '${row.content}'`
+      : `'${row.direction}', '${row.channel}', '${row.endpoint}', '${row.content}'`;
+    runSqlite(dbPath, `INSERT INTO conversations (${cols}) VALUES (${vals});`);
   }
   return dbPath;
 }
@@ -135,6 +140,30 @@ test('fetch caps window to max_conversations on first run', () => {
   assert.equal(result.end_id, 10);
   assert.equal(result.count, 5);
   assert.match(result.conversations, /--begin 6 --end 10/);
+});
+
+test('fetch caps correctly with non-contiguous IDs (gaps)', () => {
+  const dir = tmpDir();
+  const dataDir = path.join(dir, 'data');
+  const rows = [
+    { id: 1, direction: 'in', channel: 'tg', endpoint: '1', content: 'a' },
+    { id: 5, direction: 'in', channel: 'tg', endpoint: '1', content: 'b' },
+    { id: 10, direction: 'in', channel: 'tg', endpoint: '1', content: 'c' },
+    { id: 50, direction: 'in', channel: 'tg', endpoint: '1', content: 'd' },
+    { id: 100, direction: 'in', channel: 'tg', endpoint: '1', content: 'e' },
+    { id: 200, direction: 'in', channel: 'tg', endpoint: '1', content: 'f' },
+  ];
+  const dbPath = createC4Db(dir, rows);
+  const fetchPath = createFakeFetch(dir);
+  writeConfig(dataDir, { min_conversations: 2, max_conversations: 3, c4_db: dbPath, c4_fetch_script: fetchPath });
+
+  const result = JSON.parse(runNode(REFLECT, ['fetch'], { ZYLOS_DATA_DIR: dataDir }));
+
+  assert.equal(result.status, 'ready');
+  assert.equal(result.begin_id, 50);
+  assert.equal(result.end_id, 200);
+  assert.equal(result.count, 3);
+  assert.match(result.conversations, /--begin 50 --end 200/);
 });
 
 test('commit skip records observation without advancing processed cursor', () => {
