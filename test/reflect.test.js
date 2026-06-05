@@ -166,6 +166,33 @@ test('fetch caps correctly with non-contiguous IDs (gaps)', () => {
   assert.match(result.conversations, /--begin 50 --end 200/);
 });
 
+test('fetch cap is bounded by latestId (no rows beyond snapshot)', () => {
+  const dir = tmpDir();
+  const dataDir = path.join(dir, 'data');
+  const rows = Array.from({ length: 10 }, (_, i) => ({
+    direction: 'in', channel: 'telegram', endpoint: '1', content: `msg${i}`
+  }));
+  const dbPath = createC4Db(dir, rows);
+  const fetchPath = createFakeFetch(dir);
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(path.join(dataDir, 'state.json'), JSON.stringify({ last_processed_id: 3, last_observed_id: 3 }));
+  writeConfig(dataDir, { min_conversations: 2, max_conversations: 5, c4_db: dbPath, c4_fetch_script: fetchPath });
+
+  const result = JSON.parse(runNode(REFLECT, ['fetch'], { ZYLOS_DATA_DIR: dataDir }));
+
+  assert.equal(result.status, 'ready');
+  assert.equal(result.begin_id, 6);
+  assert.equal(result.end_id, 10);
+  assert.equal(result.count, 5);
+  assert.ok(result.begin_id <= result.end_id);
+  assert.match(result.conversations, /--begin 6 --end 10/);
+
+  runSqlite(dbPath, `INSERT INTO conversations (direction, channel, endpoint_id, content) VALUES ('in', 'tg', '1', 'late-arrival');`);
+
+  const result2 = JSON.parse(runNode(REFLECT, ['fetch'], { ZYLOS_DATA_DIR: dataDir }));
+  assert.ok(result2.begin_id <= result2.end_id);
+});
+
 test('commit skip records observation without advancing processed cursor', () => {
   const dir = tmpDir();
   const dataDir = path.join(dir, 'data');

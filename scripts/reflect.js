@@ -126,8 +126,8 @@ function getConversationCount(c4DbPath, beginId, endId) {
   return normalizeId(raw || '0', 0);
 }
 
-function getCappedBeginId(c4DbPath, afterId, limit) {
-  const sql = `SELECT MIN(id) FROM (SELECT id FROM conversations WHERE id > ${afterId} ORDER BY id DESC LIMIT ${limit});`;
+function getCappedBeginId(c4DbPath, afterId, endId, limit) {
+  const sql = `SELECT MIN(id) FROM (SELECT id FROM conversations WHERE id > ${afterId} AND id <= ${endId} ORDER BY id DESC LIMIT ${limit});`;
   const raw = run('sqlite3', [c4DbPath, sql]).trim();
   if (!raw || raw === '') return null;
   return normalizeId(raw, null);
@@ -190,7 +190,7 @@ function commandFetch() {
   const endId = latestId;
   const maxConversations = Number(config.max_conversations ?? DEFAULT_CONFIG.max_conversations);
   if (Number.isSafeInteger(maxConversations) && maxConversations > 0) {
-    const cappedId = getCappedBeginId(c4DbPath, state.last_processed_id, maxConversations);
+    const cappedId = getCappedBeginId(c4DbPath, state.last_processed_id, endId, maxConversations);
     if (cappedId !== null) {
       beginId = cappedId;
     }
