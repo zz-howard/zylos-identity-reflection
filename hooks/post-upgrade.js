@@ -76,11 +76,6 @@ function schedulerTasks() {
   return output ? JSON.parse(output) : [];
 }
 
-function isOldLongPrompt(task) {
-  const prompt = task.prompt || '';
-  return prompt.includes('identity-reflection') && (prompt.includes('MOTIVATION') || prompt.includes('WHAT BELONGS'));
-}
-
 function isManagedShortPrompt(task) {
   const prompt = task.prompt || '';
   return task.name === TASK_NAME && prompt.includes('Run the identity-reflection skill') && prompt.includes('identity-reflection/SKILL.md');
@@ -98,13 +93,6 @@ function ensureSchedulerTask(state) {
   const prompt = schedulerPrompt();
   const hash = promptHash(prompt);
   const tasks = schedulerTasks();
-
-  for (const task of tasks) {
-    if (isOldLongPrompt(task)) {
-      console.log(`Pausing old long-prompt task: ${task.id}`);
-      pauseTask(task.id);
-    }
-  }
 
   for (const task of tasks) {
     const staleCurrent = task.name === TASK_NAME && task.prompt === prompt && (task.status !== 'pending' || task.cron !== TASK_CRON);
