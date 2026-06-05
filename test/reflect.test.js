@@ -177,7 +177,7 @@ test('commit no_change advances processed cursor and requires end-id', () => {
   assert.equal(state.last_result, 'no_change');
 });
 
-test('post-install creates data files and migrates only old long-prompt scheduler task', () => {
+test('post-install creates data files and registers scheduler task', () => {
   const dir = tmpDir();
   const zylosDir = path.join(dir, 'zylos');
   const schedulerDir = path.join(zylosDir, 'scheduler');
@@ -196,8 +196,6 @@ test('post-install creates data files and migrates only old long-prompt schedule
     priority INTEGER,
     status TEXT
   );`);
-  runSqlite(dbPath, "INSERT INTO tasks (id, name, prompt, cron_expression, status) VALUES ('old-task', 'identity-reflection', 'identity-reflection MOTIVATION WHAT BELONGS old prompt', '0 0,12 * * *', 'pending');");
-  runSqlite(dbPath, "INSERT INTO tasks (id, name, prompt, cron_expression, status) VALUES ('user-task', 'identity-reflection', 'user custom short prompt', '0 0,12 * * *', 'pending');");
 
   fs.writeFileSync(path.join(cliDir, 'cli.js'), `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(cliLog)}, process.argv.slice(2).join(' ') + '\\n');\n`);
 
@@ -209,7 +207,5 @@ test('post-install creates data files and migrates only old long-prompt schedule
   assert.ok(fs.existsSync(path.join(componentDir, 'state.json')));
 
   const log = fs.readFileSync(cliLog, 'utf8');
-  assert.match(log, /^pause old-task/m);
-  assert.doesNotMatch(log, /pause user-task/);
   assert.match(log, /^add Run the identity-reflection skill/m);
 });

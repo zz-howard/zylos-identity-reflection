@@ -116,11 +116,6 @@ function schedulerTasks() {
   return output ? JSON.parse(output) : [];
 }
 
-function isOldLongPrompt(task) {
-  const prompt = task.prompt || '';
-  return prompt.includes('identity-reflection') && (prompt.includes('MOTIVATION') || prompt.includes('WHAT BELONGS'));
-}
-
 function isCurrentTask(task, expectedPrompt) {
   return task.name === TASK_NAME && task.prompt === expectedPrompt;
 }
@@ -143,13 +138,6 @@ function ensureSchedulerTask() {
   const expectedHash = promptHash(expectedPrompt);
   const state = readJson(STATE_PATH, DEFAULT_STATE);
   const tasks = schedulerTasks();
-
-  for (const task of tasks) {
-    if (isOldLongPrompt(task)) {
-      console.log(`Pausing old long-prompt task: ${task.id}`);
-      pauseTask(task.id);
-    }
-  }
 
   const currentTasks = tasks.filter(task => isCurrentTask(task, expectedPrompt));
   const activeCurrent = currentTasks.find(task => task.status === 'pending' && task.cron === TASK_CRON);
