@@ -1,6 +1,6 @@
 ---
 name: identity-reflection
-version: 0.1.0
+version: 0.1.3
 description: Maintain durable self-knowledge for a Zylos agent by periodically reflecting on unprocessed C4 conversations and updating only stable identity traits when warranted.
 type: utility
 

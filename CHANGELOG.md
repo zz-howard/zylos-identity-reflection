@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-06-05
+
+### Added
+- CLAUDE.md with development guide and release process from zylos-component-template.
+
+### Fixed
+- Cap conversation fetch window to `max_conversations` (default 300) to prevent pulling entire DB on first run.
+- Use SQL-based capping (`ORDER BY id DESC LIMIT N`) instead of ID arithmetic — handles non-contiguous IDs correctly.
+- Bound cap query to `latestId` snapshot (`AND id <= endId`) to prevent read-snapshot race between queries.
+
+### Changed
+- Replace hardcoded "Howard" references with generic "owner" in SKILL.md, README.md, and default policy.md template.
+- Remove legacy long-prompt task migration from post-install and post-upgrade hooks.
+
 ## [0.1.0] - 2026-06-05
 
 ### Added
