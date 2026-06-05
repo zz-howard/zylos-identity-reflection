@@ -49,7 +49,7 @@ const DEFAULT_POLICY = `# Identity Reflection Policy
 
 ## Purpose
 
-Identity reflection exists to preserve useful self-knowledge so the agent can keep helping Howard and the team get things done across sessions.
+Identity reflection exists to preserve useful self-knowledge so the agent can keep helping its owner and the team get things done across sessions.
 
 ## Identity-Relevant Signals
 
@@ -65,11 +65,11 @@ Identity reflection exists to preserve useful self-knowledge so the agent can ke
 
 ## Priority
 
-1. Howard's direct feedback has absolute priority.
+1. The owner's direct feedback has absolute priority.
 2. Repeated patterns from day-to-day work are secondary signals.
 3. Group interactions are useful only when they reinforce a repeated pattern.
 
-Identity changes require evidence from multiple interactions or a clear durable instruction from Howard. When in doubt, do not edit identity.md.
+Identity changes require evidence from multiple interactions or a clear durable instruction from the owner. When in doubt, do not edit identity.md.
 `;
 
 function ensureDir(dirPath) {

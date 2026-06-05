@@ -65,7 +65,7 @@ Edit `~/zylos/components/identity-reflection/config.json`:
 
 ## Policy
 
-Edit `~/zylos/components/identity-reflection/policy.md` to customize identity conflict resolution. The default policy gives Howard's direct feedback absolute priority and requires stable evidence rather than single events.
+Edit `~/zylos/components/identity-reflection/policy.md` to customize identity conflict resolution. The default policy gives the owner's direct feedback absolute priority and requires stable evidence rather than single events.
 
 ## CLI
 
