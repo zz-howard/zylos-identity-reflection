@@ -1,0 +1,176 @@
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+const ROOT = path.resolve(import.meta.dirname, '..');
+const REFLECT = path.join(ROOT, 'scripts/reflect.js');
+const POST_INSTALL = path.join(ROOT, 'hooks/post-install.js');
+
+function tmpDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'identity-reflection-test-'));
+}
+
+function runNode(script, args = [], env = {}) {
+  return execFileSync('node', [script, ...args], {
+    cwd: ROOT,
+    env: { ...process.env, ...env },
+    encoding: 'utf8'
+  });
+}
+
+function runNodeFailure(script, args = [], env = {}) {
+  try {
+    runNode(script, args, env);
+  } catch (err) {
+    return {
+      stdout: err.stdout?.toString() || '',
+      stderr: err.stderr?.toString() || '',
+      status: err.status
+    };
+  }
+  throw new Error('Expected command to fail');
+}
+
+function runSqlite(dbPath, sql) {
+  execFileSync('sqlite3', [dbPath, sql], { encoding: 'utf8' });
+}
+
+function createC4Db(dir, rows) {
+  const dbPath = path.join(dir, 'c4.db');
+  runSqlite(dbPath, `CREATE TABLE conversations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    direction TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    endpoint_id TEXT,
+    content TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',
+    priority INTEGER DEFAULT 3,
+    require_idle INTEGER DEFAULT 0,
+    retry_count INTEGER DEFAULT 0,
+    delivery_action TEXT
+  );`);
+  for (const row of rows) {
+    runSqlite(dbPath, `INSERT INTO conversations (direction, channel, endpoint_id, content) VALUES ('${row.direction}', '${row.channel}', '${row.endpoint}', '${row.content}');`);
+  }
+  return dbPath;
+}
+
+function createFakeFetch(dir) {
+  const fetchPath = path.join(dir, 'c4-fetch.js');
+  fs.writeFileSync(fetchPath, `console.log('[Conversations] ' + process.argv.slice(2).join(' '));\n`);
+  return fetchPath;
+}
+
+function writeConfig(dataDir, config) {
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(path.join(dataDir, 'config.json'), `${JSON.stringify(config, null, 2)}\n`);
+}
+
+test('fetch skips below threshold without advancing state', () => {
+  const dir = tmpDir();
+  const dataDir = path.join(dir, 'data');
+  const dbPath = createC4Db(dir, [{ direction: 'in', channel: 'telegram', endpoint: '1', content: 'hello' }]);
+  const fetchPath = createFakeFetch(dir);
+  writeConfig(dataDir, { min_conversations: 2, c4_db: dbPath, c4_fetch_script: fetchPath });
+
+  const result = JSON.parse(runNode(REFLECT, ['fetch'], { ZYLOS_DATA_DIR: dataDir }));
+
+  assert.equal(result.status, 'skip');
+  assert.equal(result.begin_id, 1);
+  assert.equal(result.end_id, 1);
+  assert.equal(result.count, 1);
+  assert.equal(result.conversations, undefined);
+});
+
+test('fetch returns ready envelope with transcript at threshold', () => {
+  const dir = tmpDir();
+  const dataDir = path.join(dir, 'data');
+  const dbPath = createC4Db(dir, [
+    { direction: 'in', channel: 'telegram', endpoint: '1', content: 'hello' },
+    { direction: 'out', channel: 'telegram', endpoint: '1', content: 'hi' }
+  ]);
+  const fetchPath = createFakeFetch(dir);
+  writeConfig(dataDir, { min_conversations: 2, c4_db: dbPath, c4_fetch_script: fetchPath });
+
+  const result = JSON.parse(runNode(REFLECT, ['fetch'], { ZYLOS_DATA_DIR: dataDir }));
+
+  assert.equal(result.status, 'ready');
+  assert.equal(result.begin_id, 1);
+  assert.equal(result.end_id, 2);
+  assert.equal(result.count, 2);
+  assert.match(result.conversations, /--begin 1 --end 2/);
+});
+
+test('commit skip records observation without advancing processed cursor', () => {
+  const dir = tmpDir();
+  const dataDir = path.join(dir, 'data');
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(path.join(dataDir, 'state.json'), JSON.stringify({ last_processed_id: 7, last_observed_id: 7 }));
+
+  const result = JSON.parse(runNode(REFLECT, ['commit', '--result', 'skip', '--observed-end-id', '9'], { ZYLOS_DATA_DIR: dataDir }));
+  const state = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
+
+  assert.equal(result.status, 'committed');
+  assert.equal(state.last_processed_id, 7);
+  assert.equal(state.last_observed_id, 9);
+  assert.equal(state.last_result, 'skip');
+  assert.ok(fs.existsSync(path.join(dataDir, 'logs/runs.jsonl')));
+});
+
+test('commit no_change advances processed cursor and requires end-id', () => {
+  const dir = tmpDir();
+  const dataDir = path.join(dir, 'data');
+  fs.mkdirSync(dataDir, { recursive: true });
+
+  const failure = runNodeFailure(REFLECT, ['commit', '--result', 'no_change'], { ZYLOS_DATA_DIR: dataDir });
+  assert.equal(failure.status, 1);
+  assert.match(failure.stdout, /requires --end-id/);
+
+  runNode(REFLECT, ['commit', '--result', 'no_change', '--end-id', '12'], { ZYLOS_DATA_DIR: dataDir });
+  const state = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
+
+  assert.equal(state.last_processed_id, 12);
+  assert.equal(state.last_observed_id, 12);
+  assert.equal(state.last_result, 'no_change');
+});
+
+test('post-install creates data files and migrates only old long-prompt scheduler task', () => {
+  const dir = tmpDir();
+  const zylosDir = path.join(dir, 'zylos');
+  const schedulerDir = path.join(zylosDir, 'scheduler');
+  const cliDir = path.join(zylosDir, '.claude/skills/scheduler/scripts');
+  const dbPath = path.join(schedulerDir, 'scheduler.db');
+  const cliLog = path.join(dir, 'scheduler-cli.log');
+  fs.mkdirSync(schedulerDir, { recursive: true });
+  fs.mkdirSync(cliDir, { recursive: true });
+
+  runSqlite(dbPath, `CREATE TABLE tasks (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    type TEXT,
+    cron_expression TEXT,
+    priority INTEGER,
+    status TEXT
+  );`);
+  runSqlite(dbPath, "INSERT INTO tasks (id, name, prompt, cron_expression, status) VALUES ('old-task', 'identity-reflection', 'identity-reflection MOTIVATION WHAT BELONGS old prompt', '0 0,12 * * *', 'pending');");
+  runSqlite(dbPath, "INSERT INTO tasks (id, name, prompt, cron_expression, status) VALUES ('user-task', 'identity-reflection', 'user custom short prompt', '0 0,12 * * *', 'pending');");
+
+  fs.writeFileSync(path.join(cliDir, 'cli.js'), `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(cliLog)}, process.argv.slice(2).join(' ') + '\\n');\n`);
+
+  runNode(POST_INSTALL, [], { ZYLOS_DIR: zylosDir });
+
+  const componentDir = path.join(zylosDir, 'components/identity-reflection');
+  assert.ok(fs.existsSync(path.join(componentDir, 'config.json')));
+  assert.ok(fs.existsSync(path.join(componentDir, 'policy.md')));
+  assert.ok(fs.existsSync(path.join(componentDir, 'state.json')));
+
+  const log = fs.readFileSync(cliLog, 'utf8');
+  assert.match(log, /^pause old-task/m);
+  assert.doesNotMatch(log, /pause user-task/);
+  assert.match(log, /^add Run the identity-reflection skill/m);
+});
