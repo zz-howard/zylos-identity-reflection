@@ -35,9 +35,9 @@ dependencies:
 
 # Identity Reflection
 
-Use this skill when a scheduled `identity-reflection` task arrives, or when Howard explicitly asks to run identity reflection.
+Use this skill when a scheduled `identity-reflection` task arrives, or when the owner explicitly asks to run identity reflection.
 
-Identity reflection exists to help Howard and the team get things done across sessions. It is not free-form self-improvement. It maintains accurate self-knowledge only where that self-knowledge improves future work.
+Identity reflection exists to help the owner and team get things done across sessions. It is not free-form self-improvement. It maintains accurate self-knowledge only where that self-knowledge improves future work.
 
 ## Execution Model
 
