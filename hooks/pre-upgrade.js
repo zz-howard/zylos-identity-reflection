@@ -1,41 +1,31 @@
 #!/usr/bin/env node
-/**
- * Pre-upgrade hook for zylos-identity-reflection
- *
- * Called by Claude BEFORE CLI upgrade steps.
- * If this hook fails (exit code 1), the upgrade is aborted.
- *
- * This hook handles:
- * - Backup critical data before upgrade
- * - Validate upgrade prerequisites
- * - Stop dependent services if needed
- *
- * Exit codes:
- *   0 - Continue with upgrade
- *   1 - Abort upgrade (with error message)
- */
 
-import fs from 'fs';
-import path from 'path';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
-const HOME = process.env.HOME;
-const DATA_DIR = path.join(HOME, 'zylos/components/identity-reflection');
-const configPath = path.join(DATA_DIR, 'config.json');
+const HOME = os.homedir();
+const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(HOME, 'zylos');
+const DATA_DIR = process.env.ZYLOS_DATA_DIR || path.join(ZYLOS_DIR, 'components/identity-reflection');
+const BACKUP_DIR = path.join(DATA_DIR, 'backups', new Date().toISOString().replace(/[:.]/g, '-'));
+const FILES = ['config.json', 'policy.md', 'state.json'];
 
-console.log('[pre-upgrade] Running identity-reflection pre-upgrade checks...\n');
+console.log('[pre-upgrade] Backing up identity-reflection data...');
 
-// 1. Backup config before upgrade
-if (fs.existsSync(configPath)) {
-  const backupPath = configPath + '.backup';
-  fs.copyFileSync(configPath, backupPath);
-  console.log('Config backed up to:', backupPath);
+let copied = 0;
+for (const name of FILES) {
+  const source = path.join(DATA_DIR, name);
+  if (!fs.existsSync(source)) continue;
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  fs.copyFileSync(source, path.join(BACKUP_DIR, name));
+  copied += 1;
+  console.log(`Backed up ${name}`);
 }
 
-// 2. Add any pre-upgrade validations here
-// Example: Check if required services are available
-// if (!checkDependency()) {
-//   console.error('Error: Required dependency not available');
-//   process.exit(1);
-// }
+if (copied === 0) {
+  console.log('No existing config/policy/state files to back up.');
+} else {
+  console.log(`Backup directory: ${BACKUP_DIR}`);
+}
 
-console.log('\n[pre-upgrade] Checks passed, proceeding with upgrade.');
+console.log('[pre-upgrade] Complete!');

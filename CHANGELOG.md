@@ -8,8 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.0] - 2026-06-05
 
 ### Added
-- Initial release
-- Basic functionality
+- Initial identity-reflection utility component.
+- `scripts/reflect.js fetch` with cursor-based C4 conversation fetching, threshold gating, and JSON envelope output.
+- `scripts/reflect.js commit` with atomic state updates and run logging.
+- Scheduler task registration and legacy long-prompt task migration in `post-install`.
+- Background-subagent workflow and identity safety constraints in `SKILL.md`.
+- User-editable policy file for identity-relevant signal priority.
 
 ### Upgrade Notes
 
