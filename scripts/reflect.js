@@ -17,6 +17,7 @@ const RUN_LOG_PATH = path.join(LOG_DIR, 'runs.jsonl');
 const DEFAULT_CONFIG = {
   enabled: true,
   min_conversations: 50,
+  max_conversations: 300,
   identity_file: '~/zylos/memory/identity.md',
   c4_db: '~/zylos/comm-bridge/c4.db',
   c4_fetch_script: '~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js'
@@ -125,6 +126,13 @@ function getConversationCount(c4DbPath, beginId, endId) {
   return normalizeId(raw || '0', 0);
 }
 
+function getCappedBeginId(c4DbPath, afterId, endId, limit) {
+  const sql = `SELECT MIN(id) FROM (SELECT id FROM conversations WHERE id > ${afterId} AND id <= ${endId} ORDER BY id DESC LIMIT ${limit});`;
+  const raw = run('sqlite3', [c4DbPath, sql]).trim();
+  if (!raw || raw === '') return null;
+  return normalizeId(raw, null);
+}
+
 function fetchTranscript(c4FetchScript, beginId, endId) {
   return run('node', [c4FetchScript, '--begin', String(beginId), '--end', String(endId)]);
 }
@@ -178,8 +186,15 @@ function commandFetch() {
   }
 
   const latestId = getLatestConversationId(c4DbPath);
-  const beginId = state.last_processed_id + 1;
+  let beginId = state.last_processed_id + 1;
   const endId = latestId;
+  const maxConversations = Number(config.max_conversations ?? DEFAULT_CONFIG.max_conversations);
+  if (Number.isSafeInteger(maxConversations) && maxConversations > 0) {
+    const cappedId = getCappedBeginId(c4DbPath, state.last_processed_id, endId, maxConversations);
+    if (cappedId !== null) {
+      beginId = cappedId;
+    }
+  }
   const count = getConversationCount(c4DbPath, beginId, endId);
   const minConversations = Number(config.min_conversations ?? DEFAULT_CONFIG.min_conversations);
 
