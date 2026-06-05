@@ -34,6 +34,15 @@ const DEFAULT_STATE = {
   scheduler_prompt_hash: null
 };
 
+function requireSqliteCli() {
+  try {
+    execFileSync('which', ['sqlite3'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch {
+    console.error('sqlite3 CLI is required but not found. Install it with: apt-get install sqlite3');
+    process.exit(1);
+  }
+}
+
 function schedulerPrompt() {
   return 'Run the identity-reflection skill. Load and follow ~/zylos/.claude/skills/identity-reflection/SKILL.md. Use its required background-subagent execution model; the main session should only orchestrate and mark the scheduler task done after the subagent completes.';
 }
@@ -121,6 +130,7 @@ function ensureSchedulerTask(state) {
 }
 
 console.log('[post-upgrade] Migrating identity-reflection config/state...');
+requireSqliteCli();
 const config = { ...DEFAULT_CONFIG, ...readJson(CONFIG_PATH, DEFAULT_CONFIG) };
 writeJson(CONFIG_PATH, config);
 

@@ -14,6 +14,23 @@
 
 The component never updates identity automatically from script logic. The script fetches conversations and maintains state; the agent applies judgment and may update only the `Personality & Behavioral Traits` section of `memory/identity.md`.
 
+## System Requirements
+
+- Node.js, provided by the Zylos runtime.
+- `sqlite3` CLI, used to inspect the C4 and scheduler SQLite databases.
+
+Install `sqlite3` on Debian/Ubuntu systems with:
+
+```bash
+apt-get install sqlite3
+```
+
+On macOS with Homebrew:
+
+```bash
+brew install sqlite3
+```
+
 ## Install
 
 ```bash

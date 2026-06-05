@@ -36,6 +36,15 @@ const DEFAULT_STATE = {
   scheduler_prompt_hash: null
 };
 
+function requireSqliteCli() {
+  try {
+    execFileSync('which', ['sqlite3'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch {
+    console.error('sqlite3 CLI is required but not found. Install it with: apt-get install sqlite3');
+    process.exit(1);
+  }
+}
+
 const DEFAULT_POLICY = `# Identity Reflection Policy
 
 ## Purpose
@@ -168,6 +177,7 @@ function ensureSchedulerTask() {
 }
 
 console.log('[post-install] Setting up identity-reflection...');
+requireSqliteCli();
 ensureDir(DATA_DIR);
 ensureDir(LOG_DIR);
 

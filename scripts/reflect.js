@@ -32,6 +32,14 @@ const DEFAULT_STATE = {
   scheduler_prompt_hash: null
 };
 
+function requireSqliteCli() {
+  try {
+    execFileSync('which', ['sqlite3'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch {
+    throw new Error('sqlite3 CLI is required but not found. Install it with: apt-get install sqlite3');
+  }
+}
+
 function expandHome(value) {
   if (typeof value !== 'string') return value;
   if (value === '~') return HOME;
@@ -148,6 +156,8 @@ function parseArgs(argv) {
 }
 
 function commandFetch() {
+  requireSqliteCli();
+
   const config = loadConfig();
   const state = loadState();
 
@@ -210,15 +220,18 @@ function commandCommit(args) {
   if (result === 'skip') {
     if (args['observed-end-id'] !== undefined && args['observed-end-id'] !== true) {
       observedEndId = normalizeId(args['observed-end-id']);
-      nextState.last_observed_id = observedEndId;
+      nextState.last_observed_id = Math.max(state.last_observed_id, observedEndId);
     }
   } else {
     if (args['end-id'] === undefined || args['end-id'] === true) {
       throw new Error(`commit --result ${result} requires --end-id <N>`);
     }
     processedEndId = normalizeId(args['end-id']);
+    if (processedEndId < state.last_processed_id) {
+      throw new Error(`Refusing to move last_processed_id backward from ${state.last_processed_id} to ${processedEndId}`);
+    }
     nextState.last_processed_id = processedEndId;
-    nextState.last_observed_id = processedEndId;
+    nextState.last_observed_id = Math.max(state.last_observed_id, processedEndId);
     if (result === 'updated') nextState.last_identity_update_at = now;
   }
 

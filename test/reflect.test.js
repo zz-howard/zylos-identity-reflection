@@ -14,7 +14,7 @@ function tmpDir() {
 }
 
 function runNode(script, args = [], env = {}) {
-  return execFileSync('node', [script, ...args], {
+  return execFileSync(process.execPath, [script, ...args], {
     cwd: ROOT,
     env: { ...process.env, ...env },
     encoding: 'utf8'
@@ -86,6 +86,19 @@ test('fetch skips below threshold without advancing state', () => {
   assert.equal(result.conversations, undefined);
 });
 
+test('fetch reports missing sqlite3 CLI with explicit JSON error', () => {
+  const dir = tmpDir();
+  const dataDir = path.join(dir, 'data');
+  writeConfig(dataDir, { min_conversations: 1 });
+
+  const failure = runNodeFailure(REFLECT, ['fetch'], { ZYLOS_DATA_DIR: dataDir, PATH: dir });
+  const result = JSON.parse(failure.stdout);
+
+  assert.equal(failure.status, 1);
+  assert.equal(result.status, 'error');
+  assert.match(result.error, /sqlite3 CLI is required but not found/);
+});
+
 test('fetch returns ready envelope with transcript at threshold', () => {
   const dir = tmpDir();
   const dataDir = path.join(dir, 'data');
@@ -119,6 +132,32 @@ test('commit skip records observation without advancing processed cursor', () =>
   assert.equal(state.last_observed_id, 9);
   assert.equal(state.last_result, 'skip');
   assert.ok(fs.existsSync(path.join(dataDir, 'logs/runs.jsonl')));
+});
+
+test('commit preserves monotonic cursors and rejects stale processed end-id', () => {
+  const dir = tmpDir();
+  const dataDir = path.join(dir, 'data');
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(path.join(dataDir, 'state.json'), JSON.stringify({ last_processed_id: 10, last_observed_id: 12 }));
+
+  runNode(REFLECT, ['commit', '--result', 'skip', '--observed-end-id', '9'], { ZYLOS_DATA_DIR: dataDir });
+  let state = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
+  assert.equal(state.last_processed_id, 10);
+  assert.equal(state.last_observed_id, 12);
+
+  const failure = runNodeFailure(REFLECT, ['commit', '--result', 'no_change', '--end-id', '5'], { ZYLOS_DATA_DIR: dataDir });
+  const result = JSON.parse(failure.stdout);
+  assert.equal(failure.status, 1);
+  assert.match(result.error, /Refusing to move last_processed_id backward/);
+
+  state = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
+  assert.equal(state.last_processed_id, 10);
+  assert.equal(state.last_observed_id, 12);
+
+  runNode(REFLECT, ['commit', '--result', 'updated', '--end-id', '11'], { ZYLOS_DATA_DIR: dataDir });
+  state = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
+  assert.equal(state.last_processed_id, 11);
+  assert.equal(state.last_observed_id, 12);
 });
 
 test('commit no_change advances processed cursor and requires end-id', () => {
