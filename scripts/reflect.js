@@ -146,6 +146,8 @@ function getFetchWindow(c4DbPath, afterId, latestId, limit) {
 }
 
 function fetchTranscript(c4FetchScript, beginId, endId) {
+  // Core supplies readable history. Do not project its output again: a
+  // legitimate fallback may contain a structured-message marker.
   return run('node', [c4FetchScript, '--begin', String(beginId), '--end', String(endId)]);
 }
 

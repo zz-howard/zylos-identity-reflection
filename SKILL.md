@@ -39,6 +39,14 @@ Use this skill when a scheduled `identity-reflection` task arrives, or when the 
 
 Identity reflection exists to help the owner and team get things done across sessions. It is not free-form self-improvement. It maintains accurate self-knowledge only where that self-knowledge improves future work.
 
+## Core History Compatibility
+
+On Core versions with conversation projection, structured history messages
+appear as readable text. Earlier Core versions already provide plain-text
+history, so reflection works as usual with no minimum Core version requirement.
+The component passes Core fetch output unchanged to the reflection agent; it
+does not project the transcript a second time.
+
 ## Execution Model
 
 Reflection must run in a background subagent. The main session must not do the conversation analysis inline.

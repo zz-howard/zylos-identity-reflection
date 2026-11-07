@@ -31,6 +31,12 @@ On macOS with Homebrew:
 brew install sqlite3
 ```
 
+On Core versions with conversation projection, structured history messages
+appear as readable text. Earlier Core versions already provide plain-text
+history, so reflection works as usual with no minimum Core version requirement.
+The component passes Core fetch output unchanged to the reflection agent; it
+does not project the transcript a second time.
+
 ## Install
 
 ```bash
@@ -110,3 +116,28 @@ Run entries are appended to `logs/runs.jsonl`.
 ## License
 
 [MIT](./LICENSE)
+
+## Tests
+
+The default tests are self-contained and need no Core checkout or Core-related
+environment variables. They use a fake history CLI in
+private temporary directories (the sqlite3 CLI is still required):
+
+```bash
+npm test
+```
+
+The real-Core projection tests are opt-in. Use the current `multi-session/chat` Core checkout with its existing
+development dependencies, and an older Core checkout at `6436b3e2` without the
+public projection module. Both checkouts need their existing Core dependencies.
+The tests import the structured-message prefix from the current Core schema. Do not install either into a live instance. Keep the
+component's `v0.1.5` Git tag available for the byte-for-byte baseline.
+Run in temporary HOME, ZYLOS_DIR, PM2_HOME and short TMPDIR directories; cases
+create private C4 databases beneath TMPDIR and clean them up. No model,
+runtime, PM2, tmux or network is started.
+
+```bash
+ZYLOS_PACKAGE_ROOT=/path/to/core-checkout \
+TEST_LEGACY_CORE_ROOT=/path/to/older-core \
+npm run test:integration
+```
