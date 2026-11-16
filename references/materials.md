@@ -28,13 +28,19 @@ return fewer context rows. A global content checkpoint identifies single-session
 mode unless current Core configuration selects multi-session mode; rows keep
 actual component groups, clues normalize to `*`, and logs use `memory/sessions/`.
 
-Telegram `src/lib/context.js:205-241` emits a header and sender signature before
-context blocks and `current-message`. OpenMax `src/lib/message.js:218-254,302-366`
-emits its header, self-closing `org-context`, `message-context`, `sender-context`,
-and `openmax-instruction`, with sender inside `current-message`. The collector
-preserves both headers and signatures, removes explicit structural context
-blocks, keeps trailing media, and decodes XML entities once. There is no keyword or
-sender filter. Default excluded channels are internal/system/void/multica.
+## Wrapper Evidence
+
+Inbound material and traced rows use one channel-independent rule: when a
+complete `<current-message>...</current-message>` pair exists anywhere, keep
+only its inner body, preceded by the first line if that line starts with `[`.
+Without a complete pair, return the message unchanged. No channel names or
+individual context tags are recognized. Body text stays as stored; context and
+media outside the pair are omitted. Real Telegram group/DM and OpenMax OM-RUN
+fixtures cover the observed format, with unchanged plain text and unknown
+wrappers. There is no keyword or sender filter. Default excluded channels are
+internal/system/void/multica.
+
+## Ledger Evidence
 
 `ledger.jsonl` stores `{type,date,session_group,c4_id,quote,absorbed}`. Dates use
 the run's configured timezone. Quotes are single lines up to 500 characters.
