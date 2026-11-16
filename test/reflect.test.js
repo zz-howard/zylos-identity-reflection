@@ -307,3 +307,46 @@ test('hooks remove stale managed tasks including paused duplicates and preserve 
   assert.match(calls, /remove.*paused/);
   assert.ok(calls.trim().split('\n').map(line => JSON.parse(line)).every(call => call[0] !== 'pause'));
 });
+
+const FILTERS = { channels: null, exclude_channels: ['internal', 'system', 'void', 'multica'] };
+function tpArtifact(f, ranges) {
+  const dir = path.join(f.zylos, 'components/thinking-patterns/materials'); fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'abcdef01.json'), JSON.stringify({ schema_version: 1, run_id: 'abcdef01', created_at: new Date().toISOString(), trace_complete: true, filters: FILTERS, ranges, clues: [], traces: [] }));
+}
+test('pending clues keep a fully reused run incomplete until traced', t => {
+  const f = fixture(t);
+  const now = new Date().toISOString();
+  tpArtifact(f, [{ session_group: 'A', after: 5, end: 10, checkpoint_id: 2 }]);
+  f.set({ groups: ['A'], checkpoints: [{ id: 2, session_group: 'A', end_conversation_id: 10 }], rows: [{ id: 5, session_group: 'A', channel: 'telegram', direction: 'in', timestamp: now, content: 'Earlier correction' }] });
+  fs.writeFileSync(path.join(f.data, 'state.json'), JSON.stringify({ schema_version: 2, groups: { A: { end_conversation_id: 5, checkpoint_id: 1 } }, pending_clues: [{ session_group: 'A', c4_id: 5, kind: 'correction', source_range: { session_group: 'A', after: 0, end: 5, checkpoint_id: 1 } }] }));
+  const fetched = f.invoke(['fetch']).value;
+  assert.equal(fetched.report.reused_ranges, 1);
+  assert.equal(fetched.trace_complete, false);
+  assert.equal(f.invoke(['commit', '--run', fetched.run_id, '--result', 'no_change']).code, 1);
+});
+test('a run mixing a reused and an uncovered thread needs tracing before commit', t => {
+  const f = fixture(t);
+  const now = new Date().toISOString();
+  tpArtifact(f, [{ session_group: 'A', after: 0, end: 10, checkpoint_id: 1 }]);
+  f.set({ groups: ['A', 'B'], checkpoints: [{ id: 1, session_group: 'A', end_conversation_id: 10 }, { id: 2, session_group: 'B', end_conversation_id: 20 }], rows: [{ id: 20, session_group: 'B', channel: 'telegram', direction: 'in', timestamp: now, content: 'Please verify this conclusion.' }] });
+  const fetched = f.invoke(['fetch']).value;
+  assert.equal(fetched.report.reused_ranges, 1);
+  assert.equal(fetched.trace_complete, false);
+  assert.equal(f.invoke(['commit', '--run', fetched.run_id, '--result', 'no_change']).code, 1);
+});
+test('a paused copy of the current task is replaced by one pending task', t => {
+  const f = fixture(t);
+  const scheduler = path.join(f.zylos, '.claude/skills/scheduler/scripts');
+  fs.mkdirSync(scheduler, { recursive: true });
+  fs.copyFileSync(fixtureCli, path.join(scheduler, 'cli.js'));
+  const prompt = 'Run the identity-reflection skill. Load and follow ~/zylos/.claude/skills/identity-reflection/SKILL.md. Use its required background-subagent execution model; the main session should only orchestrate and mark the scheduler task done after the subagent completes.';
+  f.set({ tasks: [
+    { id: 'paused-current', name: 'identity-reflection', prompt, status: 'paused', cron_expression: '30 0 * * *' },
+    { id: 'live', name: 'identity-reflection', prompt, status: 'pending', cron_expression: '30 0 * * *' }
+  ] });
+  assert.equal(f.invoke([], {}, path.join(ROOT, 'hooks/post-upgrade.js')).code, 0);
+  const tasks = JSON.parse(fs.readFileSync(f.env.FIXTURE_STATE)).tasks;
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].status, 'pending');
+  assert.equal(tasks[0].cron_expression, '30 0 * * *');
+});
