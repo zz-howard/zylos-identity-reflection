@@ -110,4 +110,4 @@ function run() {
   throw new Error('Usage: reflect.js fetch | trace --clues FILE | commit --result RESULT | ledger ACTION | write-identity --file FILE --sha256 HASH --types FILE | rotation');
 }
 try { process.stdout.write(JSON.stringify(run(), null, 2) + '\n'); }
-catch (error) { process.exitCode = 1; process.stdout.write(JSON.stringify({ status: 'error', error: error.message }) + '\n'); }
+catch (error) { process.exitCode = 1; process.stdout.write(JSON.stringify({ status: 'error', error: error.message, ...(error.memory_bytes ? { memory_bytes: error.memory_bytes } : {}) }) + '\n'); }

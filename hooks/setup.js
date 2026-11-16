@@ -20,8 +20,11 @@ not by similarity of events. Default absorption requires at least two distinct
 threads AND two distinct dates. Never turn a single correction into a trait.
 
 Only edit Personality & Behavioral Traits. Merge and rewrite existing traits
-before adding text; identity has its own 16 KiB (16384-byte) budget, separate
-from references. Use the
+before adding text; only a replacement identity above 16384 bytes exceeds the
+size limit. Never gate on identity plus references. Report identity bytes before,
+proposed and actual after writing, references bytes and combined before/after
+bytes from memory_bytes in the run summary, including deferred/rejected writes.
+Combined size is informational only. Use the
 locked hash writer when available. A busy Sync or hash conflict defers writing;
 keep ledger entries unabsorbed and retry from current content next time.
 Mark a type absorbed only after a successful identity write, then request

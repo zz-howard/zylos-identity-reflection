@@ -42,6 +42,13 @@ internal/system/void/multica.
 
 ## Ledger Evidence
 
+Identity writes report `memory_bytes`: `identity_before`, `identity_proposed`,
+`identity_after`, `references`, `combined_before` and `combined_after` in bytes.
+Only proposed identity size above 16384 blocks writing; combined sizes never do.
+Deferred/rejected writes retain the original actual after size. Missing
+references counts as zero; an unavailable stat reports null combined values and
+`references_error`, without blocking the writer.
+
 `ledger.jsonl` stores `{type,date,session_group,c4_id,quote,absorbed}`. Dates use
 the run's configured timezone. Quotes are single lines up to 500 characters.
 Duplicates use type/date/thread/C4 id. Only unabsorbed entries contribute to the

@@ -107,7 +107,17 @@ export function writeIdentity({ file, sha256, types }, config) {
   const before = section(identity.toString('utf8')), after = section(replacement.toString('utf8'));
   if (before.prefix !== after.prefix || before.suffix !== after.suffix) throw new Error('Only Personality & Behavioral Traits may change');
   if (before.body === after.body) throw new Error('Identity proposal has no personality changes');
-  if (replacement.length > 16384) throw new Error('Identity exceeds its 16 KiB budget; merge existing traits');
+  let referencesBytes = null, referencesError;
+  try { referencesBytes = fs.statSync(path.join(ZYLOS_DIR, 'memory/references.md')).size; }
+  catch (error) { if (error.code === 'ENOENT') referencesBytes = 0; else referencesError = error.code; }
+  const memoryBytes = {
+    identity_before: identity.length, identity_proposed: replacement.length,
+    identity_after: identity.length, references: referencesBytes,
+    combined_before: referencesBytes === null ? null : identity.length + referencesBytes,
+    combined_after: referencesBytes === null ? null : identity.length + referencesBytes,
+    ...(referencesError ? { references_error: referencesError } : {})
+  };
+  if (replacement.length > 16384) throw Object.assign(new Error('Identity exceeds its 16 KiB budget; merge existing traits'), { memory_bytes: memoryBytes });
   // Save the expected result before the writer so a stopped run can reconcile it.
   const state = loadState();
   state.identity_write_pending = { file: config.identity_file, sha256: hash(replacement), types: [...new Set(types)], evidence: entries().filter(row => types.includes(row.type) && !row.absorbed).map(evidenceKey) };
@@ -118,7 +128,7 @@ export function writeIdentity({ file, sha256, types }, config) {
     if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Identity file is outside memory root');
     writer = child(config.memory_writer, ['--path', relative, '--sha256', sha256], replacement);
     if (writer.ok) { try { if (JSON.parse(writer.output).ok !== true) writer.ok = false; } catch { writer.ok = false; } }
-    if (!writer.ok) return { status: 'write_deferred', writer, ledger_preserved: true };
+    if (!writer.ok) return { status: 'write_deferred', writer, ledger_preserved: true, memory_bytes: memoryBytes };
   } else {
     const temporary = `${config.identity_file}.${process.pid}.tmp`;
     fs.writeFileSync(temporary, replacement, { mode: fs.statSync(config.identity_file).mode });
@@ -127,5 +137,7 @@ export function writeIdentity({ file, sha256, types }, config) {
   }
   recoverIdentityWrite(config);
   const rotation = retryRotation(config);
-  return { status: 'updated', writer, rotation };
+  memoryBytes.identity_after = replacement.length;
+  memoryBytes.combined_after = referencesBytes === null ? null : replacement.length + referencesBytes;
+  return { status: 'updated', writer, rotation, memory_bytes: memoryBytes };
 }

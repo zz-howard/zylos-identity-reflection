@@ -55,11 +55,49 @@ function fixture(t) {
 test('identity budget accepts 16384 bytes independently of references and rejects one extra byte', t => {
   const f = fixture(t);
   fs.writeFileSync(path.join(f.memory, 'references.md'), 'r'.repeat(16384));
+  const original = fs.readFileSync(f.identity);
   const rejected = f.invoke(f.writeArgs(16385));
   assert.equal(rejected.code, 1);
   assert.match(rejected.value.error, /Identity exceeds its 16 KiB budget/);
-  assert.equal(f.invoke(f.writeArgs(16384)).value.status, 'updated');
+  assert.equal(rejected.value.memory_bytes.identity_before, original.length);
+  assert.equal(rejected.value.memory_bytes.identity_proposed, 16385);
+  assert.equal(rejected.value.memory_bytes.identity_after, original.length);
+  assert.equal(rejected.value.memory_bytes.combined_after, original.length + 16384);
+  assert.ok(fs.readFileSync(f.identity).equals(original));
+  assert.equal(fs.existsSync(f.env.FIXTURE_CALLS), false);
+  const accepted = f.invoke(f.writeArgs(16384));
+  assert.equal(accepted.code, 0);
+  assert.equal(accepted.value.status, 'updated');
+  assert.deepEqual(accepted.value.memory_bytes, { identity_before: original.length,
+    identity_proposed: 16384, identity_after: 16384, references: 16384,
+    combined_before: original.length + 16384, combined_after: 32768 });
   assert.equal(fs.statSync(f.identity).size, 16384);
+});
+
+test('busy identity writer reports unchanged actual bytes and the proposed size', t => {
+  const f = fixture(t), original = fs.readFileSync(f.identity);
+  const references = Buffer.from('\u4e2d'.repeat(100));
+  fs.writeFileSync(path.join(f.memory, 'references.md'), references);
+  const result = f.invoke(f.writeArgs(200), { FIXTURE_SYNC_BUSY: '1' });
+  assert.equal(result.code, 0);
+  assert.equal(result.value.status, 'write_deferred');
+  assert.deepEqual(result.value.memory_bytes, { identity_before: original.length,
+    identity_proposed: 200, identity_after: original.length, references: references.length,
+    combined_before: original.length + references.length, combined_after: original.length + references.length });
+  assert.ok(fs.readFileSync(f.identity).equals(original));
+});
+
+test('unavailable references size is reported without blocking an identity write', t => {
+  const f = fixture(t);
+  fs.symlinkSync('references.md', path.join(f.memory, 'references.md'));
+  const result = f.invoke(f.writeArgs(200));
+  assert.equal(result.code, 0);
+  assert.equal(result.value.status, 'updated');
+  assert.equal(result.value.memory_bytes.identity_after, 200);
+  assert.equal(result.value.memory_bytes.references, null);
+  assert.equal(result.value.memory_bytes.combined_before, null);
+  assert.equal(result.value.memory_bytes.combined_after, null);
+  assert.equal(result.value.memory_bytes.references_error, 'ELOOP');
 });
 
 test('rotation with only skipped targets stays pending and reports their reasons until enqueue succeeds', t => {
@@ -81,5 +119,8 @@ test('identity accepts inline type arrays and rejects empty types', t => {
   const invalid = f.invoke(f.writeArgs(200, '[]'));
   assert.equal(invalid.code, 1);
   assert.match(invalid.value.error, /requires error types/);
-  assert.equal(f.invoke(f.writeArgs(200, '["unchecked-conclusion"]')).value.status, 'updated');
+  const accepted = f.invoke(f.writeArgs(200, '["unchecked-conclusion"]'));
+  assert.equal(accepted.value.status, 'updated');
+  assert.equal(accepted.value.memory_bytes.references, 0);
+  assert.equal(accepted.value.memory_bytes.combined_after, 200);
 });

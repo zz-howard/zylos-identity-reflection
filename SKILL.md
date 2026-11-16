@@ -99,7 +99,8 @@ The subagent owns the actual reflection work:
 7. For an eligible type, read the current identity in full and hash its raw bytes.
    Prepare a complete replacement file, merging existing personality traits
    before adding content. Keep all other sections byte-identical and keep identity
-   within its own 16 KiB (16384-byte) budget; references has a separate budget.
+   within its own 16 KiB (16384-byte) limit. Do not reject a write based on
+   identity plus references; combined size is reporting only.
    Never write the live identity directly. Run:
    `reflect.js write-identity --file <replacement> --sha256 <hash> --types '["error-type"]'`.
    `--types` also accepts a path to a JSON array file.
@@ -107,7 +108,11 @@ The subagent owns the actual reflection work:
    evidence, and requests rotation. A busy Sync/hash conflict preserves unabsorbed
    errors for the next run. Report `write_deferred` and rotation rejection; run
    `reflect.js rotation` next time if rotation remains pending. Legacy Core writer
-   absence is explicitly reported when direct replacement is used.
+   absence is explicitly reported when direct replacement is used. Include
+   `memory_bytes` in the run summary: identity before, proposed and actual after,
+   references, and combined before/after, all in bytes. A rejected/deferred write
+   reports unchanged actual after sizes. Missing references counts as zero;
+   unavailable references size is null with `references_error`, never a write gate.
 8. Run `reflect.js ledger clean` to remove types absent for 60 days. Commit only
    ranges actually reviewed using `reflect.js commit --run <run_id> --result
    no_change|updated --groups <comma-separated-completed-groups>`. A refused identity
