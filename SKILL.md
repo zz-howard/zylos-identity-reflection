@@ -1,7 +1,7 @@
 ---
 name: identity-reflection
 version: 0.1.5
-description: Maintain durable self-knowledge for a Zylos agent by periodically reflecting on unprocessed C4 conversations and updating only stable identity traits when warranted.
+description: Reflect nightly on new errors from checkpoint-covered memory and C4 context, reuse thinking-patterns correction evidence, and absorb repeated error types into stable personality traits.
 type: utility
 
 lifecycle:
@@ -17,6 +17,8 @@ lifecycle:
     - state.json
     - logs/
     - backups/
+    - ledger.jsonl
+    - materials/
 
 upgrade:
   repo: zz-howard/zylos-identity-reflection
@@ -24,9 +26,9 @@ upgrade:
 
 config:
   optional:
-    - name: IDENTITY_REFLECTION_MIN_CONVERSATIONS
-      description: Minimum unprocessed C4 conversations before reflection runs. Stored in component config.json.
-      default: "50"
+    - name: IDENTITY_REFLECTION_LEDGER_MIN_GROUPS
+      description: Minimum distinct session groups before an error type can be absorbed. Stored in component config.json.
+      default: "2"
 
 dependencies:
   - comm-bridge
@@ -41,11 +43,10 @@ Identity reflection exists to help the owner and team get things done across ses
 
 ## Core History Compatibility
 
-On Core versions with conversation projection, structured history messages
-appear as readable text. Earlier Core versions already provide plain-text
-history, so reflection works as usual with no minimum Core version requirement.
-The component passes Core fetch output unchanged to the reflection agent; it
-does not project the transcript a second time.
+History is accessed only through comm-bridge CLIs. If checkpoint or session-group
+metadata is unavailable, fetch returns an explicit `unsupported_core` skip with
+the reason and preserves progress. It never directly opens C4 SQLite. First
+upgraded runs discard the global cursor and start from the most recent day.
 
 ## Execution Model
 
@@ -68,26 +69,47 @@ The subagent owns the actual reflection work:
    ```bash
    node ~/zylos/.claude/skills/identity-reflection/scripts/reflect.js fetch
    ```
-2. Parse the JSON output.
-3. If `status` is `skip`, run:
-   ```bash
-   node ~/zylos/.claude/skills/identity-reflection/scripts/reflect.js commit --result skip --observed-end-id <end_id>
-   ```
-   Then stop. Do not edit memory.
-4. Read `~/zylos/components/identity-reflection/policy.md`.
-5. Read the configured identity file from the `identity_file` field in the fetch JSON.
-6. Analyze the fetched conversations for stable trait-level changes only.
-7. If a genuine stable trait change exists, update only the `Personality & Behavioral Traits` section in `identity.md`.
-8. If there is no genuine stable trait change, do not edit `identity.md`.
-9. Commit state:
-   - If identity changed:
-     ```bash
-     node ~/zylos/.claude/skills/identity-reflection/scripts/reflect.js commit --result updated --end-id <end_id>
-     ```
-   - If identity did not change:
-     ```bash
-     node ~/zylos/.claude/skills/identity-reflection/scripts/reflect.js commit --result no_change --end-id <end_id>
-     ```
+2. Parse the JSON output. Fetch reconciles interrupted identity writes and cleans
+   expired ledger types before computing eligibility, including quiet runs.
+   Retry `rotation` when `rotation_pending` is true.
+   Even with no new checkpoint material, review `pending_error_types` from the
+   ledger and perform step 7 for eligible unabsorbed errors. Do not reread old
+   transcripts. If `status` is `skip`, skip steps 3-6 and record this run with
+   `commit --result skip` after handling these pending items; advance no ranges.
+3. Read the component policy. For `reused` ranges, use only the supplied correction
+   clues and traces. Do not reread their logs or inbound originals. For uncovered
+   ranges, read listed session logs, changed decision/preference files and the
+   entire `inbound` original-message net. Select correction clues by meaning,
+   without keyword rules or sender identification.
+4. Save uncovered clues as a JSON array of `{session_group,c4_id,kind:"correction"}`.
+   Run `reflect.js trace --run <run_id> --clues <file>`, then read its traces.
+   Trace limits defer excess clues to state. On later runs, process those first;
+   call trace with an empty array to continue. Never commit an unfinished group.
+   Fetch resumes the active run; `completed_groups` must not be processed again.
+   Even if no clues were found, call trace with `[]` to record completion.
+5. Add only newly discovered errors using `reflect.js ledger append --file <file>`.
+   Each array entry contains `type,date,session_group,c4_id,quote`. Use one short
+   quote, no event narrative. Group by error type, not similar-looking events.
+6. `reflect.js ledger list --type <type>` compares the new error with the ledger.
+   Default eligibility requires two distinct threads AND two distinct dates.
+   Also handle eligible `pending_error_types` retained from a deferred write.
+   Never reread historical original conversations to establish repetition.
+7. For an eligible type, read the current identity in full and hash its raw bytes.
+   Prepare a complete replacement file, merging existing personality traits
+   before adding content. Keep all other sections byte-identical and keep identity
+   plus references within 16 KiB. Never write the live identity directly. Run:
+   `reflect.js write-identity --file <replacement> --sha256 <hash> --types <types-json>`.
+   This uses Core's locked writer if present, absorbs only the successful write's
+   evidence, and requests rotation. A busy Sync/hash conflict preserves unabsorbed
+   errors for the next run. Report `write_deferred` and rotation rejection; run
+   `reflect.js rotation` next time if rotation remains pending. Legacy Core writer
+   absence is explicitly reported when direct replacement is used.
+8. Run `reflect.js ledger clean` to remove types absent for 60 days. Commit only
+   ranges actually reviewed using `reflect.js commit --run <run_id> --result
+   no_change|updated --groups <json-array-of-completed-groups>`. A refused identity
+   write can still commit reviewed material: the ledger retains the pending type.
+9. Report fetch and trace counts, characters and bytes, reused ranges, deferred
+   clues, identity writer mode and rotation result. See `references/materials.md`.
 
 ## Identity Write Boundary
 

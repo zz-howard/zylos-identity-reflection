@@ -1,374 +1,295 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
-const REFLECT = path.join(ROOT, 'scripts/reflect.js');
-const POST_INSTALL = path.join(ROOT, 'hooks/post-install.js');
+const CLI = path.join(ROOT, 'scripts/reflect.js');
+const fixtureCli = path.join(ROOT, 'test/helpers/cli-fixture.js');
+const fixtureMemory = path.join(ROOT, 'test/helpers/memory-fixture.js');
+const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 
-function tmpDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'identity-reflection-test-'));
-}
-
-function runNode(script, args = [], env = {}) {
-  return execFileSync(process.execPath, [script, ...args], {
-    cwd: ROOT,
-    env: { ...process.env, ...env },
-    encoding: 'utf8'
-  });
-}
-
-function runNodeFailure(script, args = [], env = {}) {
-  try {
-    runNode(script, args, env);
-  } catch (err) {
-    return {
-      stdout: err.stdout?.toString() || '',
-      stderr: err.stderr?.toString() || '',
-      status: err.status
-    };
+// These CLI integration cases run only private fixtures and temporary files.
+// Run when reflection state, ledger, identity writes or hook migration changes;
+// skip only when none of those boundaries changed. No daemon, tmux or DB starts.
+function fixture(t, config = {}) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ir-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const zylos = path.join(home, 'zylos'), data = path.join(zylos, 'components/identity-reflection');
+  fs.mkdirSync(data, { recursive: true });
+  fs.mkdirSync(path.join(home, 'tmp'));
+  fs.mkdirSync(path.join(zylos, 'memory'), { recursive: true });
+  const statePath = path.join(home, 'fixture.json'), calls = path.join(home, 'calls');
+  fs.writeFileSync(statePath, JSON.stringify({ groups: [], rows: [], checkpoints: [], tasks: [] }));
+  fs.writeFileSync(calls, '');
+  const identity = path.join(zylos, 'memory/identity.md');
+  fs.writeFileSync(identity, '# Identity\n\n## Who I Am\nPiper\n\n## Personality & Behavioral Traits\nOld trait.\n\n## Principles\nCare.\n');
+  const env = { ...process.env, HOME: home, ZYLOS_DIR: zylos, ZYLOS_DATA_DIR: data, PM2_HOME: path.join(home, 'pm2'), TMPDIR: path.join(home, 'tmp'), TMUX_TMPDIR: path.join(home, 'tmp'), FIXTURE_STATE: statePath, FIXTURE_CALLS: calls, TZ: 'UTC' };
+  fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ c4_db_cli: fixtureCli, c4_fetch_cli: fixtureCli, memory_writer: fixtureMemory, rotation_script: fixtureMemory, ...config }));
+  function invoke(args, extra = {}, script = CLI) {
+    // Read back all process destinations before every invocation.
+    for (const key of ['HOME', 'ZYLOS_DIR', 'ZYLOS_DATA_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR']) assert.ok(env[key].startsWith(home));
+    const child = spawnSync(process.execPath, [script, ...args], { cwd: ROOT, env: { ...env, ...extra }, encoding: 'utf8', timeout: 15000, maxBuffer: 4 * 1024 * 1024 });
+    assert.equal(child.error, undefined);
+    return { code: child.status, value: script === CLI ? JSON.parse(child.stdout) : child.stdout, stderr: child.stderr };
   }
-  throw new Error('Expected command to fail');
+  const json = (name, value) => { const file = path.join(home, name); fs.writeFileSync(file, JSON.stringify(value)); return file; };
+  const set = value => fs.writeFileSync(statePath, JSON.stringify(value));
+  return { home, zylos, data, identity, env, calls, invoke, json, set };
+}
+function errorRow(group, date, id, type = 'premature-conclusion') { return { type, date, session_group: group, c4_id: id, quote: 'Please verify before concluding.' }; }
+function append(f, rows) { return f.invoke(['ledger', 'append', '--file', f.json('errors.json', rows)]); }
+function proposal(f, body = 'Verify evidence before concluding.') {
+  const before = fs.readFileSync(f.identity, 'utf8');
+  const file = path.join(f.home, 'proposal.md');
+  fs.writeFileSync(file, before.replace('Old trait.', body));
+  return ['write-identity', '--file', file, '--sha256', hash(before), '--types', f.json('types.json', ['premature-conclusion'])];
 }
 
-function runSqlite(dbPath, sql) {
-  execFileSync('sqlite3', [dbPath, sql], { encoding: 'utf8' });
-}
+test('ledger requires distinct threads and distinct dates and deduplicates evidence', t => {
+  const f = fixture(t);
+  const a = errorRow('A', '2026-11-14', 10), b = errorRow('A', '2026-11-15', 11);
+  assert.equal(append(f, [a, b, a]).value.added, 2);
+  assert.equal(f.invoke(['ledger', 'list']).value.thresholds[0].eligible, false);
+  assert.equal(f.invoke(proposal(f)).code, 1);
+  append(f, [errorRow('B', '2026-11-15', 12)]);
+  assert.equal(f.invoke(['ledger', 'list']).value.thresholds[0].eligible, true);
+  assert.equal(f.invoke(['ledger', 'absorb', '--type', a.type]).code, 1);
+});
 
-function createC4Db(dir, rows) {
-  const dbPath = path.join(dir, 'c4.db');
-  runSqlite(dbPath, `CREATE TABLE conversations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-    direction TEXT NOT NULL,
-    channel TEXT NOT NULL,
-    endpoint_id TEXT,
-    content TEXT NOT NULL,
-    status TEXT DEFAULT 'pending',
-    priority INTEGER DEFAULT 3,
-    require_idle INTEGER DEFAULT 0,
-    retry_count INTEGER DEFAULT 0,
-    delivery_action TEXT
-  );`);
-  for (const row of rows) {
-    const idClause = row.id != null ? `${row.id}, ` : '';
-    const cols = row.id != null ? 'id, direction, channel, endpoint_id, content' : 'direction, channel, endpoint_id, content';
-    const vals = row.id != null
-      ? `${row.id}, '${row.direction}', '${row.channel}', '${row.endpoint}', '${row.content}'`
-      : `'${row.direction}', '${row.channel}', '${row.endpoint}', '${row.content}'`;
-    runSqlite(dbPath, `INSERT INTO conversations (${cols}) VALUES (${vals});`);
-  }
-  return dbPath;
-}
+test('locked identity write preserves other sections, absorbs evidence and requests rotation', t => {
+  const f = fixture(t);
+  append(f, [errorRow('A', '2026-11-14', 10), errorRow('B', '2026-11-15', 11)]);
+  const args = proposal(f);
+  const result = f.invoke(args);
+  assert.equal(result.code, 0);
+  assert.equal(result.value.status, 'updated');
+  assert.equal(result.value.rotation.status, 'rotation_requested');
+  assert.match(fs.readFileSync(f.identity, 'utf8'), /## Who I Am\nPiper/);
+  assert.match(fs.readFileSync(f.calls, 'utf8'), /rotation/);
+  assert.ok(f.invoke(['ledger', 'list']).value.entries.every(row => row.absorbed));
+  append(f, [errorRow('C', '2026-11-16', 12)]);
+  f.invoke(['ledger', 'absorb', '--type', 'premature-conclusion']);
+  assert.equal(f.invoke(['ledger', 'list']).value.entries.at(-1).absorbed, false);
+});
 
-function createFakeFetch(dir) {
-  const fetchPath = path.join(dir, 'c4-fetch.js');
-  fs.writeFileSync(fetchPath, `console.log('[Conversations] ' + process.argv.slice(2).join(' '));\n`);
-  return fetchPath;
-}
+test('busy memory sync preserves identity, errors and thread progress for retry', t => {
+  const f = fixture(t);
+  append(f, [errorRow('A', '2026-11-14', 10), errorRow('B', '2026-11-15', 11)]);
+  f.json('unused.json', {});
+  fs.writeFileSync(path.join(f.data, 'state.json'), JSON.stringify({ schema_version: 2, groups: { A: { end_conversation_id: 20, checkpoint_id: 2 } }, pending_clues: [] }));
+  const before = fs.readFileSync(f.identity, 'utf8');
+  const args = proposal(f), refused = f.invoke(args, { FIXTURE_SYNC_BUSY: '1' });
+  assert.equal(refused.value.status, 'write_deferred');
+  assert.match(refused.value.writer.output, /SYNC_BUSY/);
+  assert.equal(fs.readFileSync(f.identity, 'utf8'), before);
+  assert.ok(f.invoke(['ledger', 'list']).value.entries.every(row => !row.absorbed));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.data, 'state.json'))).groups.A.end_conversation_id, 20);
+  assert.equal(f.invoke(args).value.status, 'updated');
+});
 
-function writeConfig(dataDir, config) {
-  fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(path.join(dataDir, 'config.json'), `${JSON.stringify(config, null, 2)}\n`);
-}
-
-test('fetch skips below threshold without advancing state', () => {
-  const dir = tmpDir();
-  const dataDir = path.join(dir, 'data');
-  const dbPath = createC4Db(dir, [{ direction: 'in', channel: 'telegram', endpoint: '1', content: 'hello' }]);
-  const fetchPath = createFakeFetch(dir);
-  writeConfig(dataDir, { min_conversations: 2, c4_db: dbPath, c4_fetch_script: fetchPath });
-
-  const result = JSON.parse(runNode(REFLECT, ['fetch'], { ZYLOS_DATA_DIR: dataDir }));
-
+test('fetch reports pending absorption and rotation without new checkpoint progress', t => {
+  const f = fixture(t);
+  append(f, [errorRow('A', '2026-11-14', 10), errorRow('B', '2026-11-15', 11)]);
+  fs.writeFileSync(path.join(f.data, 'state.json'), JSON.stringify({ schema_version: 2, groups: {}, pending_clues: [], rotation_pending: true }));
+  const result = f.invoke(['fetch']).value;
   assert.equal(result.status, 'skip');
-  assert.equal(result.begin_id, 1);
-  assert.equal(result.end_id, 1);
-  assert.equal(result.count, 1);
-  assert.equal(result.conversations, undefined);
+  assert.equal(result.pending_error_types.length, 1);
+  assert.equal(result.pending_error_types[0], 'premature-conclusion');
+  assert.equal(result.rotation_pending, true);
+  assert.equal(f.invoke(proposal(f)).value.status, 'updated');
+  assert.equal(f.invoke(['fetch']).value.pending_error_types.length, 0);
 });
 
-test('fetch reports missing sqlite3 CLI with explicit JSON error', () => {
-  const dir = tmpDir();
-  const dataDir = path.join(dir, 'data');
-  writeConfig(dataDir, { min_conversations: 1 });
-
-  const failure = runNodeFailure(REFLECT, ['fetch'], { ZYLOS_DATA_DIR: dataDir, PATH: dir });
-  const result = JSON.parse(failure.stdout);
-
-  assert.equal(failure.status, 1);
-  assert.equal(result.status, 'error');
-  assert.match(result.error, /sqlite3 CLI is required but not found/);
+test('identity rejects stale hashes, outside-section changes, missing section and over-budget content', t => {
+  const f = fixture(t);
+  append(f, [errorRow('A', '2026-11-14', 10), errorRow('B', '2026-11-15', 11)]);
+  const args = proposal(f);
+  const stale = [...args]; stale[stale.indexOf('--sha256') + 1] = '0'.repeat(64);
+  assert.match(f.invoke(stale).value.error, /hash changed/);
+  const file = args[args.indexOf('--file') + 1], original = fs.readFileSync(file, 'utf8');
+  fs.writeFileSync(file, original.replace('Piper', 'Changed identity'));
+  assert.match(f.invoke(args).value.error, /Only Personality/);
+  fs.writeFileSync(file, original.replace('## Personality & Behavioral Traits', '## Other'));
+  assert.match(f.invoke(args).value.error, /section is missing/);
+  fs.writeFileSync(file, original.replace('Verify evidence before concluding.', 'x'.repeat(17000)));
+  assert.match(f.invoke(args).value.error, /16 KiB/);
 });
 
-test('fetch returns ready envelope with transcript at threshold', () => {
-  const dir = tmpDir();
-  const dataDir = path.join(dir, 'data');
-  const dbPath = createC4Db(dir, [
-    { direction: 'in', channel: 'telegram', endpoint: '1', content: 'hello' },
-    { direction: 'out', channel: 'telegram', endpoint: '1', content: 'hi' }
-  ]);
-  const fetchPath = createFakeFetch(dir);
-  writeConfig(dataDir, { min_conversations: 2, c4_db: dbPath, c4_fetch_script: fetchPath });
-
-  const result = JSON.parse(runNode(REFLECT, ['fetch'], { ZYLOS_DATA_DIR: dataDir }));
-
-  assert.equal(result.status, 'ready');
-  assert.equal(result.begin_id, 1);
-  assert.equal(result.end_id, 2);
-  assert.equal(result.count, 2);
-  assert.match(result.conversations, /--begin 1 --end 2/);
+test('rotation rejection stays pending and legacy writer is explicitly reported', t => {
+  const f = fixture(t, { memory_writer: '/missing/writer.js' });
+  append(f, [errorRow('A', '2026-11-14', 10), errorRow('B', '2026-11-15', 11)]);
+  const result = f.invoke(proposal(f), { FIXTURE_ROTATION_REJECT: '1' }).value;
+  assert.equal(result.writer.mode, 'legacy');
+  assert.equal(result.rotation.status, 'rotation_deferred');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.data, 'state.json'))).rotation_pending, true);
+  assert.equal(f.invoke(['rotation']).value.status, 'rotation_requested');
 });
 
-// Runs the real CLI against a temporary C4 database and a stand-in c4-fetch.js;
-// HOME, ZYLOS_DIR and ZYLOS_DATA_DIR all point into the temporary directory.
-// Covers: a transcript over Node's 1 MiB default passes through run() and the whole
-// JSON envelope reaches a reader on a pipe-like stdout. Does not cover the real c4-fetch.js or the upper
-// buffer limit. Run it when run(), fetchTranscript() or the fetch output changes;
-// it needs only node and sqlite3, so there is no reason to skip it.
-test('fetch returns a transcript larger than 1 MiB intact', (t) => {
-  const dir = tmpDir();
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const dataDir = path.join(dir, 'data');
-  const dbPath = createC4Db(dir, [
-    { direction: 'in', channel: 'telegram', endpoint: '1', content: 'hello' },
-    { direction: 'out', channel: 'telegram', endpoint: '1', content: 'hi' }
-  ]);
-  const transcriptBytes = 2 * 1024 * 1024;
-  const endMarker = '[end of transcript]';
-  const fetchPath = path.join(dir, 'c4-fetch.js');
-  fs.writeFileSync(
-    fetchPath,
-    `process.stdout.write('x'.repeat(${transcriptBytes - endMarker.length}) + ${JSON.stringify(endMarker)});\n`
-  );
-  writeConfig(dataDir, { min_conversations: 2, c4_db: dbPath, c4_fetch_script: fetchPath });
-
-  const child = spawnSync(process.execPath, [REFLECT, 'fetch'], {
-    cwd: ROOT,
-    env: { ...process.env, HOME: dir, ZYLOS_DIR: path.join(dir, 'zylos'), ZYLOS_DATA_DIR: dataDir },
-    encoding: 'utf8',
-    maxBuffer: 8 * 1024 * 1024,
-    timeout: 30_000
-  });
-
-  assert.equal(child.status, 0, child.stdout.slice(0, 500));
-  const result = JSON.parse(child.stdout);
-  assert.equal(result.status, 'ready');
-  assert.equal(result.conversations.length, transcriptBytes);
-  assert.ok(result.conversations.endsWith(endMarker));
+test('ledger rejects narratives and expires only types absent beyond retention', t => {
+  const f = fixture(t);
+  assert.equal(append(f, [{ ...errorRow('A', '2026-11-14', 10), quote: 'First line\nsecond line' }]).code, 1);
+  append(f, [errorRow('A', '2000-01-01', 1, 'old'), errorRow('A', new Date().toISOString().slice(0, 10), 2, 'recent')]);
+  assert.equal(f.invoke(['ledger', 'clean']).value.removed, 1);
+  assert.equal(f.invoke(['ledger', 'list']).value.entries[0].type, 'recent');
 });
 
-test('fetch reports disabled as a single skip envelope', (t) => {
-  const dir = tmpDir();
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const dataDir = path.join(dir, 'data');
-  writeConfig(dataDir, { enabled: false, c4_fetch_script: path.join(dir, 'missing-c4-fetch.js') });
-
-  const result = JSON.parse(runNode(REFLECT, ['fetch'], { HOME: dir, ZYLOS_DIR: path.join(dir, 'zylos'), ZYLOS_DATA_DIR: dataDir }));
-
+test('quiet fetch expires old eligible types before proposing identity changes', t => {
+  const f = fixture(t);
+  append(f, [errorRow('A', '2000-01-01', 1), errorRow('B', '2000-01-02', 2)]);
+  assert.equal(f.invoke(proposal(f)).code, 1);
+  append(f, [errorRow('A', '2000-01-01', 1), errorRow('B', '2000-01-02', 2)]);
+  const result = f.invoke(['fetch']).value;
   assert.equal(result.status, 'skip');
-  assert.equal(result.reason, 'disabled');
+  assert.equal(result.pending_error_types.length, 0);
+  assert.equal(f.invoke(['ledger', 'list']).value.entries.length, 0);
 });
 
-test('unknown command reports usage and exits non-zero', (t) => {
-  const dir = tmpDir();
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const failure = runNodeFailure(REFLECT, ['unknown'], { HOME: dir, ZYLOS_DIR: path.join(dir, 'zylos'), ZYLOS_DATA_DIR: path.join(dir, 'data') });
-
-  assert.equal(failure.status, 1);
-  assert.match(JSON.parse(failure.stdout).error, /^Usage:/);
+test('fetch reconciles an interrupted successful identity write before retrying rotation', t => {
+  const f = fixture(t);
+  const errors = [errorRow('A', '2026-11-14', 10), errorRow('B', '2026-11-15', 11)];
+  append(f, errors);
+  const args = proposal(f), replacement = fs.readFileSync(args[args.indexOf('--file') + 1]);
+  const evidence = errors.map(row => hash(JSON.stringify([row.type, row.date, row.session_group, row.c4_id])));
+  fs.writeFileSync(path.join(f.data, 'state.json'), JSON.stringify({ schema_version: 2, groups: {}, pending_clues: [], identity_write_pending: { file: f.identity, sha256: hash(replacement), types: ['premature-conclusion'], evidence } }));
+  // A saved intent alone must never authorize absorption or rotation.
+  const before = f.invoke(['fetch']).value;
+  assert.equal(before.rotation_pending, false);
+  assert.ok(f.invoke(['ledger', 'list']).value.entries.every(row => !row.absorbed));
+  fs.writeFileSync(f.identity, replacement);
+  const recovered = f.invoke(['fetch']).value;
+  assert.equal(recovered.rotation_pending, true);
+  assert.equal(recovered.pending_error_types.length, 0);
+  assert.ok(f.invoke(['ledger', 'list']).value.entries.every(row => row.absorbed));
+  assert.equal(f.invoke(['rotation']).value.status, 'rotation_requested');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.data, 'state.json'))).identity_write_pending, undefined);
 });
 
-test('fetch caps window to max_conversations on first run', () => {
-  const dir = tmpDir();
-  const dataDir = path.join(dir, 'data');
-  const rows = Array.from({ length: 10 }, (_, i) => ({
-    direction: 'in', channel: 'telegram', endpoint: '1', content: `msg${i}`
-  }));
-  const dbPath = createC4Db(dir, rows);
-  const fetchPath = createFakeFetch(dir);
-  writeConfig(dataDir, { min_conversations: 2, max_conversations: 5, c4_db: dbPath, c4_fetch_script: fetchPath });
-
-  const result = JSON.parse(runNode(REFLECT, ['fetch'], { ZYLOS_DATA_DIR: dataDir }));
-
-  assert.equal(result.status, 'ready');
-  assert.equal(result.begin_id, 6);
-  assert.equal(result.end_id, 10);
-  assert.equal(result.count, 5);
-  assert.match(result.conversations, /--begin 6 --end 10/);
+test('unsupported checkpoint Core explicitly skips and preserves old cursor without using it', t => {
+  const f = fixture(t);
+  f.set({ groups: ['A'], unsupported: true });
+  fs.writeFileSync(path.join(f.data, 'state.json'), JSON.stringify({ last_processed_id: 999999 }));
+  const result = f.invoke(['fetch']).value;
+  assert.equal(result.status, 'skip');
+  assert.equal(result.mode, 'unsupported_core');
+  assert.match(result.reason, /checkpoint/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.data, 'state.json'))).last_processed_id, 999999);
 });
 
-test('fetch caps correctly with non-contiguous IDs (gaps)', () => {
-  const dir = tmpDir();
-  const dataDir = path.join(dir, 'data');
-  const rows = [
-    { id: 1, direction: 'in', channel: 'tg', endpoint: '1', content: 'a' },
-    { id: 5, direction: 'in', channel: 'tg', endpoint: '1', content: 'b' },
-    { id: 10, direction: 'in', channel: 'tg', endpoint: '1', content: 'c' },
-    { id: 50, direction: 'in', channel: 'tg', endpoint: '1', content: 'd' },
-    { id: 100, direction: 'in', channel: 'tg', endpoint: '1', content: 'e' },
-    { id: 200, direction: 'in', channel: 'tg', endpoint: '1', content: 'f' },
-  ];
-  const dbPath = createC4Db(dir, rows);
-  const fetchPath = createFakeFetch(dir);
-  writeConfig(dataDir, { min_conversations: 2, max_conversations: 3, c4_db: dbPath, c4_fetch_script: fetchPath });
-
-  const result = JSON.parse(runNode(REFLECT, ['fetch'], { ZYLOS_DATA_DIR: dataDir }));
-
-  assert.equal(result.status, 'ready');
-  assert.equal(result.begin_id, 50);
-  assert.equal(result.end_id, 200);
-  assert.equal(result.count, 3);
-  assert.match(result.conversations, /--begin 50 --end 200/);
+test('reflection reuses matching corrections without raw reads and fills uncovered thread ranges', t => {
+  const f = fixture(t);
+  const now = new Date().toISOString();
+  const cachedDir = path.join(f.zylos, 'components/thinking-patterns/materials');
+  fs.mkdirSync(cachedDir, { recursive: true });
+  const clue = { session_group: 'A', c4_id: 10, kind: 'correction' };
+  const filters = { channels: null, exclude_channels: ['internal', 'system', 'void', 'multica'] };
+  fs.writeFileSync(path.join(cachedDir, 'abcdef.json'), JSON.stringify({ schema_version: 1, run_id: 'abcdef', created_at: now, trace_complete: true, filters, ranges: [{ session_group: 'A', after: 0, end: 10, checkpoint_id: 1 }], clues: [clue, { ...clue, kind: 'decision' }], traces: [{ clue, rows: [] }] }));
+  f.set({ groups: ['A'], checkpoints: [{ id: 1, session_group: 'A', start_conversation_id: 1, end_conversation_id: 10 }], rows: [] });
+  const reused = f.invoke(['fetch']).value;
+  assert.equal(reused.status, 'ready');
+  assert.equal(reused.report.reused_ranges, 1);
+  assert.equal(reused.inbound.length, 0);
+  assert.equal(reused.session_files.length, 0);
+  assert.equal(reused.clues.length, 1);
+  assert.equal(reused.clues[0].kind, 'correction');
+  assert.doesNotMatch(fs.readFileSync(f.calls, 'utf8'), /--since|--begin/);
+  assert.equal(f.invoke(['commit', '--run', reused.run_id, '--result', 'no_change']).code, 0);
+  f.set({ groups: ['A', 'B'], checkpoints: [{ id: 1, session_group: 'A', start_conversation_id: 1, end_conversation_id: 10 }, { id: 2, session_group: 'B', start_conversation_id: 11, end_conversation_id: 20 }], rows: [{ id: 20, session_group: 'B', channel: 'telegram', direction: 'in', timestamp: now, content: 'Please verify this conclusion.' }] });
+  const filled = f.invoke(['fetch']).value;
+  assert.equal(filled.ranges.length, 1);
+  assert.equal(filled.ranges[0].session_group, 'B');
+  assert.equal(filled.inbound.length, 1);
+  assert.equal(filled.inbound[0].id, 20);
+  assert.equal(f.invoke(['commit', '--run', filled.run_id, '--result', 'no_change']).code, 1);
+  assert.equal(f.invoke(['trace', '--run', filled.run_id, '--clues', f.json('clues.json', [])]).code, 0);
+  assert.equal(f.invoke(['commit', '--run', filled.run_id, '--result', 'no_change']).code, 0);
+  const state = JSON.parse(fs.readFileSync(path.join(f.data, 'state.json')));
+  assert.equal(state.groups.A.end_conversation_id, 10);
+  assert.equal(state.groups.B.end_conversation_id, 20);
 });
 
-test('fetch window after the cursor stays within the latest id snapshot', () => {
-  const dir = tmpDir();
-  const dataDir = path.join(dir, 'data');
-  const rows = Array.from({ length: 10 }, (_, i) => ({
-    direction: 'in', channel: 'telegram', endpoint: '1', content: `msg${i}`
-  }));
-  const dbPath = createC4Db(dir, rows);
-  const fetchPath = createFakeFetch(dir);
-  fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(path.join(dataDir, 'state.json'), JSON.stringify({ last_processed_id: 3, last_observed_id: 3 }));
-  writeConfig(dataDir, { min_conversations: 2, max_conversations: 5, c4_db: dbPath, c4_fetch_script: fetchPath });
-
-  const result = JSON.parse(runNode(REFLECT, ['fetch'], { ZYLOS_DATA_DIR: dataDir }));
-
-  assert.equal(result.status, 'ready');
-  assert.equal(result.begin_id, 4);
-  assert.equal(result.end_id, 8);
-  assert.equal(result.count, 5);
-  assert.ok(result.begin_id <= result.end_id);
-  assert.match(result.conversations, /--begin 4 --end 8/);
-
-  runSqlite(dbPath, `INSERT INTO conversations (direction, channel, endpoint_id, content) VALUES ('in', 'tg', '1', 'late-arrival');`);
-
-  const result2 = JSON.parse(runNode(REFLECT, ['fetch'], { ZYLOS_DATA_DIR: dataDir }));
-  assert.ok(result2.begin_id <= result2.end_id);
+test('first upgraded reflection ignores old global backlog and only reads the recent day', t => {
+  const f = fixture(t);
+  const now = new Date().toISOString();
+  f.set({ groups: ['*'], checkpoints: [{ id: 1, session_group: '*', start_conversation_id: 1, end_conversation_id: 20 }], rows: [{ id: 10, session_group: '*', channel: 'telegram', direction: 'in', timestamp: '2000-01-01T00:00:00Z', content: 'Old backlog' }, { id: 20, session_group: '*', channel: 'telegram', direction: 'in', timestamp: now, content: 'Recent correction' }] });
+  fs.writeFileSync(path.join(f.data, 'state.json'), JSON.stringify({ schema_version: 1, last_processed_id: 1 }));
+  const result = f.invoke(['fetch']).value;
+  assert.equal(result.status, 'ready', JSON.stringify(result));
+  assert.equal(result.inbound.length, 1);
+  assert.equal(result.inbound[0].id, 20);
+  const state = JSON.parse(fs.readFileSync(path.join(f.data, 'state.json')));
+  assert.equal(state.schema_version, 2);
+  assert.equal(state.last_processed_id, undefined);
 });
 
-test('fetch catches up a backlog larger than max_conversations without skipping any', (t) => {
-  const dir = tmpDir();
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const dataDir = path.join(dir, 'data');
-  const ids = [11, 12, 15, 20, 21, 30, 31, 40];
-  const dbPath = createC4Db(dir, [
-    { id: 10, direction: 'in', channel: 'tg', endpoint: '1', content: 'already reflected' },
-    ...ids.map((id) => ({ id, direction: 'in', channel: 'tg', endpoint: '1', content: `msg${id}` }))
-  ]);
-  const fetchPath = createFakeFetch(dir);
-  fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(path.join(dataDir, 'state.json'), JSON.stringify({ last_processed_id: 10, last_observed_id: 10 }));
-  writeConfig(dataDir, { min_conversations: 1, max_conversations: 3, c4_db: dbPath, c4_fetch_script: fetchPath });
-  const env = { HOME: dir, ZYLOS_DIR: path.join(dir, 'zylos'), ZYLOS_DATA_DIR: dataDir };
-
-  const windows = [];
-  for (let run = 0; run < ids.length; run += 1) {
-    const result = JSON.parse(runNode(REFLECT, ['fetch'], env));
-    if (result.status !== 'ready') break;
-    windows.push([result.begin_id, result.end_id, result.count]);
-    assert.match(result.conversations, new RegExp(`--begin ${result.begin_id} --end ${result.end_id}$`, 'm'));
-    runNode(REFLECT, ['commit', '--result', 'no_change', '--end-id', String(result.end_id)], env);
-  }
-
-  assert.deepEqual(windows, [[11, 15, 3], [20, 30, 3], [31, 40, 2]]);
-  const state = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
-  assert.equal(state.last_processed_id, 40);
+test('reflection resumes bounded traces and retains partial ranges until every group commits', t => {
+  const f = fixture(t, { trace_max_clues: 1, trace_context: 1 });
+  const timestamp = new Date().toISOString();
+  f.set({ groups: ['A', 'B'], checkpoints: [
+    { id: 1, session_group: 'A', end_conversation_id: 10 },
+    { id: 2, session_group: 'B', end_conversation_id: 20 }
+  ], rows: [
+    { id: 10, session_group: 'A', timestamp, channel: 'telegram', direction: 'in', content: 'Correction A' },
+    { id: 20, session_group: 'B', timestamp, channel: 'telegram', direction: 'in', content: 'Correction B' }
+  ] });
+  const run = f.invoke(['fetch']).value;
+  const clues = f.json('clues.json', ['A', 'B'].map((session_group, i) => ({ session_group, c4_id: (i + 1) * 10, kind: 'correction' })));
+  assert.equal(f.invoke(['trace', '--clues', clues]).value.trace_report.deferred, 1);
+  assert.equal(f.invoke(['commit', '--result', 'no_change']).code, 1);
+  assert.equal(f.invoke(['commit', '--result', 'no_change', '--groups', f.json('groups.json', ['A'])]).code, 0);
+  const resumed = f.invoke(['fetch']).value;
+  assert.equal(resumed.run_id, run.run_id);
+  assert.equal(resumed.completed_groups.join(','), 'A');
+  const artifactFile = path.join(f.data, 'materials', `${run.run_id}.json`);
+  assert.equal(JSON.parse(fs.readFileSync(artifactFile)).committed, false);
+  assert.equal(f.invoke(['trace', '--clues', f.json('empty.json', [])]).value.traces.length, 2);
+  assert.equal(f.invoke(['commit', '--result', 'no_change']).code, 0);
+  assert.equal(JSON.parse(fs.readFileSync(artifactFile)).committed, true);
+  assert.equal(f.invoke(['trace', '--run', run.run_id, '--clues', f.json('empty.json', [])]).code, 1);
+  assert.equal(f.invoke(['fetch']).value.status, 'skip');
+  const log = fs.readFileSync(path.join(f.data, 'logs/runs.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).at(-1);
+  assert.equal(log.trace_report.deferred, 0);
+  assert.equal(log.report.inbound.count, 2);
+  const expired = JSON.parse(fs.readFileSync(artifactFile));
+  expired.created_at = '2000-01-01T00:00:00Z';
+  fs.writeFileSync(artifactFile, JSON.stringify(expired));
+  f.invoke(['fetch']);
+  assert.equal(fs.existsSync(artifactFile), false);
 });
 
-test('commit skip records observation without advancing processed cursor', () => {
-  const dir = tmpDir();
-  const dataDir = path.join(dir, 'data');
-  fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(path.join(dataDir, 'state.json'), JSON.stringify({ last_processed_id: 7, last_observed_id: 7 }));
-
-  const result = JSON.parse(runNode(REFLECT, ['commit', '--result', 'skip', '--observed-end-id', '9'], { ZYLOS_DATA_DIR: dataDir }));
-  const state = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
-
-  assert.equal(result.status, 'committed');
-  assert.equal(state.last_processed_id, 7);
-  assert.equal(state.last_observed_id, 9);
-  assert.equal(state.last_result, 'skip');
-  assert.ok(fs.existsSync(path.join(dataDir, 'logs/runs.jsonl')));
-});
-
-test('commit preserves monotonic cursors and rejects stale processed end-id', () => {
-  const dir = tmpDir();
-  const dataDir = path.join(dir, 'data');
-  fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(path.join(dataDir, 'state.json'), JSON.stringify({ last_processed_id: 10, last_observed_id: 12 }));
-
-  runNode(REFLECT, ['commit', '--result', 'skip', '--observed-end-id', '9'], { ZYLOS_DATA_DIR: dataDir });
-  let state = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
-  assert.equal(state.last_processed_id, 10);
-  assert.equal(state.last_observed_id, 12);
-
-  const failure = runNodeFailure(REFLECT, ['commit', '--result', 'no_change', '--end-id', '5'], { ZYLOS_DATA_DIR: dataDir });
-  const result = JSON.parse(failure.stdout);
-  assert.equal(failure.status, 1);
-  assert.match(result.error, /Refusing to move last_processed_id backward/);
-
-  state = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
-  assert.equal(state.last_processed_id, 10);
-  assert.equal(state.last_observed_id, 12);
-
-  runNode(REFLECT, ['commit', '--result', 'updated', '--end-id', '11'], { ZYLOS_DATA_DIR: dataDir });
-  state = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
-  assert.equal(state.last_processed_id, 11);
-  assert.equal(state.last_observed_id, 12);
-});
-
-test('commit no_change advances processed cursor and requires end-id', () => {
-  const dir = tmpDir();
-  const dataDir = path.join(dir, 'data');
-  fs.mkdirSync(dataDir, { recursive: true });
-
-  const failure = runNodeFailure(REFLECT, ['commit', '--result', 'no_change'], { ZYLOS_DATA_DIR: dataDir });
-  assert.equal(failure.status, 1);
-  assert.match(failure.stdout, /requires --end-id/);
-
-  runNode(REFLECT, ['commit', '--result', 'no_change', '--end-id', '12'], { ZYLOS_DATA_DIR: dataDir });
-  const state = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
-
-  assert.equal(state.last_processed_id, 12);
-  assert.equal(state.last_observed_id, 12);
-  assert.equal(state.last_result, 'no_change');
-});
-
-test('post-install creates data files and registers scheduler task', () => {
-  const dir = tmpDir();
-  const zylosDir = path.join(dir, 'zylos');
-  const schedulerDir = path.join(zylosDir, 'scheduler');
-  const cliDir = path.join(zylosDir, '.claude/skills/scheduler/scripts');
-  const dbPath = path.join(schedulerDir, 'scheduler.db');
-  const cliLog = path.join(dir, 'scheduler-cli.log');
-  fs.mkdirSync(schedulerDir, { recursive: true });
-  fs.mkdirSync(cliDir, { recursive: true });
-
-  runSqlite(dbPath, `CREATE TABLE tasks (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    prompt TEXT NOT NULL,
-    type TEXT,
-    cron_expression TEXT,
-    priority INTEGER,
-    status TEXT
-  );`);
-
-  fs.writeFileSync(path.join(cliDir, 'cli.js'), `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(cliLog)}, process.argv.slice(2).join(' ') + '\\n');\n`);
-
-  runNode(POST_INSTALL, [], { ZYLOS_DIR: zylosDir });
-
-  const componentDir = path.join(zylosDir, 'components/identity-reflection');
-  assert.ok(fs.existsSync(path.join(componentDir, 'config.json')));
-  assert.ok(fs.existsSync(path.join(componentDir, 'policy.md')));
-  assert.ok(fs.existsSync(path.join(componentDir, 'state.json')));
-
-  const log = fs.readFileSync(cliLog, 'utf8');
-  assert.match(log, /^add Run the identity-reflection skill/m);
+test('hooks remove stale managed tasks including paused duplicates and preserve user tasks', t => {
+  const f = fixture(t);
+  const scheduler = path.join(f.zylos, '.claude/skills/scheduler/scripts');
+  fs.mkdirSync(scheduler, { recursive: true });
+  fs.copyFileSync(fixtureCli, path.join(scheduler, 'cli.js'));
+  const prompt = 'Run the identity-reflection skill. Load and follow ~/zylos/.claude/skills/identity-reflection/SKILL.md. Use its required background-subagent execution model; the main session should only orchestrate and mark the scheduler task done after the subagent completes.';
+  f.set({ tasks: [
+    { id: 'old', name: 'identity-reflection', prompt, status: 'pending', cron_expression: '0 0,12 * * *' },
+    { id: 'paused', name: 'identity-reflection', prompt, status: 'paused', cron_expression: '0 0,12 * * *' },
+    { id: 'user', name: 'identity-reflection', prompt: 'My custom reflection', status: 'pending', cron_expression: '0 3 * * *' },
+    { id: 'thinking', name: 'thinking-patterns', prompt: 'Read patterns', status: 'pending', cron_expression: '50 23 * * *' }
+  ] });
+  fs.writeFileSync(path.join(f.data, 'state.json'), JSON.stringify({ last_processed_id: 8000 }));
+  const hook = path.join(ROOT, 'hooks/post-upgrade.js');
+  assert.equal(f.invoke([], {}, hook).code, 0);
+  fs.writeFileSync(path.join(f.data, 'policy.md'), 'Owner policy remains intact.');
+  assert.equal(f.invoke([], {}, path.join(ROOT, 'hooks/post-install.js')).code, 0);
+  assert.equal(fs.readFileSync(path.join(f.data, 'policy.md'), 'utf8'), 'Owner policy remains intact.');
+  const tasks = JSON.parse(fs.readFileSync(f.env.FIXTURE_STATE)).tasks;
+  assert.equal(tasks.length, 3);
+  assert.equal(tasks.filter(task => task.name === 'identity-reflection' && task.prompt === prompt).length, 1);
+  assert.equal(tasks.find(task => task.id === 'new-task').cron_expression, '30 0 * * *');
+  assert.equal(tasks.find(task => task.id === 'user').cron_expression, '0 3 * * *');
+  assert.equal(tasks.find(task => task.id === 'thinking').cron_expression, '50 23 * * *');
+  const state = JSON.parse(fs.readFileSync(path.join(f.data, 'state.json')));
+  assert.equal(state.schema_version, 2);
+  assert.equal(state.last_processed_id, undefined);
+  assert.equal(Object.keys(state.groups).length, 0);
+  const calls = fs.readFileSync(f.calls, 'utf8');
+  assert.match(calls, /remove.*old/);
+  assert.match(calls, /remove.*paused/);
+  assert.ok(calls.trim().split('\n').map(line => JSON.parse(line)).every(call => call[0] !== 'pause'));
 });

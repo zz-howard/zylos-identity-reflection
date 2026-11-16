@@ -1,0 +1,49 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+import test from 'node:test';
+import { checkpointFixture } from './helpers/checkpoint-fixture.js';
+
+// Integration: real shared producer code -> saved thinking-patterns material ->
+// reflection CLI -> real Core checkpoint metadata in private SQLite. Run when
+// cross-component artifact/consumer contracts change; skip unrelated identity
+// wording and scheduler changes. All instance/service paths are checked by the
+// fixture before use; child processes have deadlines and owned cleanup.
+test('reflection reuses correction evidence without fetching original material again', t => {
+  const f = checkpointFixture(t);
+  f.row(1, 'telegram:a', 'Please correct the unsupported claim.');
+  f.row(2, 'telegram:a', 'I will check the source.', 'telegram', 'out');
+  f.row(3, 'telegram:a', 'Use source evidence for decisions.');
+  f.checkpoint(1, 'telegram:a', 1, 3);
+  const root = path.resolve(import.meta.dirname, '..');
+  const module = pathToFileURL(path.join(root, 'scripts/materials.js')).href;
+  const producer = `import * as materials from ${JSON.stringify(module)};
+    const config=${JSON.stringify(f.config)};
+    const run=materials.collectMaterials(config,{}, {now:Date.parse('2026-11-16T02:00:00Z'),zylos_dir:process.env.ZYLOS_DIR,time_zone:'UTC'});
+    materials.traceMaterials(config,{},run,[{session_group:'telegram:a',c4_id:1,kind:'correction'},{session_group:'telegram:a',c4_id:3,kind:'decision'}]);
+    materials.saveArtifact(${JSON.stringify(path.join(f.env.ZYLOS_DIR, 'components/thinking-patterns/materials'))},run);`;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', producer], { env: f.env, encoding: 'utf8', timeout: 20000, maxBuffer: 1024 * 1024 });
+  assert.equal(child.status, 0, child.stderr);
+  const log = path.join(f.root, 'fetch-calls.jsonl');
+  const proxy = path.join(f.root, 'fetch-proxy.mjs');
+  fs.writeFileSync(proxy, `import fs from 'node:fs'; import {spawnSync} from 'node:child_process';
+    fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(process.argv.slice(2))+'\\n');
+    const child=spawnSync(process.execPath,[${JSON.stringify(f.config.c4_fetch_cli)},...process.argv.slice(2)],{encoding:'utf8',timeout:10000,maxBuffer:4*1024*1024});
+    process.stdout.write(child.stdout||''); process.stderr.write(child.stderr||''); process.exitCode=child.status??1;`);
+  fs.writeFileSync(path.join(f.env.ZYLOS_DATA_DIR, 'config.json'), JSON.stringify({ ...f.config, c4_fetch_cli: proxy }));
+  const result = JSON.parse(f.invoke(path.join(root, 'scripts/reflect.js'), ['fetch']));
+  assert.equal(result.status, 'ready');
+  assert.equal(result.report.reused_ranges, 1);
+  assert.equal(result.report.inbound.count, 0);
+  assert.equal(result.report.sessions.count, 0);
+  assert.equal(result.clues.length, 1);
+  assert.equal(result.clues[0].kind, 'correction');
+  assert.equal(result.clues[0].c4_id, 1);
+  assert.equal(result.traces.length, 1);
+  assert.equal(result.trace_complete, true);
+  const calls = fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.ok(calls.length > 0);
+  assert.ok(calls.every(args => args.includes('--checkpoints')));
+});
