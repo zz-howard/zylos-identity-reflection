@@ -12,6 +12,7 @@ the agent reads them only when needed. Core-projected text is never reprojected.
 The reflection consumer reads thinking-patterns' `materials/` artifacts. It
 reuses corrections and their traces only when range and channel filters match
 exactly and trace processing completed. It collects all uncovered ranges itself.
+Inbound collection rejects only stored content starting with `[Scheduled Task:` before wrapper extraction; the marker elsewhere is retained and trace context is unchanged. `filters.exclude_scheduled_tasks: true` records this contract. Older artifacts without that field fail filter matching and are recollected.
 `report.reused_ranges` and zero inbound/session sizes prove successful reuse.
 `report.reuse_misses` lists each uncovered thread with `range_mismatch`,
 `filters_mismatch`, or `thinking_patterns_incomplete`.

@@ -185,7 +185,7 @@ test('reflection reuses matching corrections without raw reads and fills uncover
   const cachedDir = path.join(f.zylos, 'components/thinking-patterns/materials');
   fs.mkdirSync(cachedDir, { recursive: true });
   const clue = { session_group: 'A', c4_id: 10, kind: 'correction' };
-  const filters = { channels: null, exclude_channels: ['internal', 'system', 'void', 'multica'] };
+  const filters = { channels: null, exclude_channels: ['internal', 'system', 'void', 'multica'], exclude_scheduled_tasks: true };
   fs.writeFileSync(path.join(cachedDir, 'abcdef.json'), JSON.stringify({ schema_version: 1, run_id: 'abcdef', created_at: now, trace_complete: true, filters, ranges: [{ session_group: 'A', after: 0, end: 10, checkpoint_id: 1 }], clues: [clue, { ...clue, kind: 'decision' }], traces: [{ clue, rows: [] }] }));
   f.set({ groups: ['A'], checkpoints: [{ id: 1, session_group: 'A', start_conversation_id: 1, end_conversation_id: 10 }], rows: [] });
   const reused = f.invoke(['fetch']).value;
@@ -308,7 +308,7 @@ test('hooks remove stale managed tasks including paused duplicates and preserve 
   assert.ok(calls.trim().split('\n').map(line => JSON.parse(line)).every(call => call[0] !== 'pause'));
 });
 
-const FILTERS = { channels: null, exclude_channels: ['internal', 'system', 'void', 'multica'] };
+const FILTERS = { channels: null, exclude_channels: ['internal', 'system', 'void', 'multica'], exclude_scheduled_tasks: true };
 function tpArtifact(f, ranges) {
   const dir = path.join(f.zylos, 'components/thinking-patterns/materials'); fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'abcdef01.json'), JSON.stringify({ schema_version: 1, run_id: 'abcdef01', created_at: new Date().toISOString(), trace_complete: true, filters: FILTERS, ranges, clues: [], traces: [] }));

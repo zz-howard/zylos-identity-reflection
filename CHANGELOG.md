@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Actions After Upgrading
+- Installation and upgrade hooks remove stale component-managed tasks, including paused ones: the name must be `identity-reflection` and the prompt must contain both `Run the identity-reflection skill` and `identity-reflection/SKILL.md`. They create or retain one pending task with the current fixed prompt and nightly cron `30 0 * * *`. User-created tasks with different prompts and all thinking-patterns tasks are untouched. After upgrading, list scheduler tasks and confirm that exactly one pending component-managed identity-reflection task remains; preserve your custom tasks.
+
 ### Changed
+- Exclude messages whose stored content starts with `[Scheduled Task:` from inbound material. Shared artifacts record this filter; artifacts without it are recollected rather than reused. Trace context is unchanged.
 - Collect checkpoint-covered per-thread material through comm-bridge CLIs and reuse completed thinking-patterns correction evidence.
 - Replace global backlog progress with per-thread state, beginning from the recent day on migration; explicitly skip unsupported Core history APIs.
 - Schedule reflection nightly at 00:30 and remove stale component-managed scheduler tasks while preserving custom tasks.

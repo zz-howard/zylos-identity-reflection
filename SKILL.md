@@ -81,6 +81,7 @@ The subagent owns the actual reflection work:
    ranges, read listed session logs, changed decision/preference files and the
    entire `inbound` original-message net. Select correction clues by meaning,
    without keyword rules or sender identification.
+   Inbound collection excludes stored content starting with `[Scheduled Task:`; trace context is unchanged. Artifacts missing this filter are recollected.
 4. Save uncovered clues as a JSON array of `{session_group,c4_id,kind:"correction"}`.
    Run `reflect.js trace --run <run_id> --clues <file>`, then read its traces.
    Trace limits apply cumulatively to this run and defer excess clues to state.

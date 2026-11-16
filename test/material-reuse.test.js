@@ -47,3 +47,29 @@ test('reflection reuses correction evidence without fetching original material a
   assert.ok(calls.length > 0);
   assert.ok(calls.every(args => args.includes('--checkpoints')));
 });
+
+// Same isolated real Core/SQLite boundary. Run when inbound filters or artifact
+// compatibility change; skip unrelated ledger, wording and scheduler changes.
+test('reflection recollects old artifacts without the scheduled task filter', t => {
+  const f = checkpointFixture(t);
+  f.row(1, 'telegram:a', '[Scheduled Task: task-1 #1] machine prompt');
+  f.row(2, 'telegram:a', 'quoted [Scheduled Task: task-1 #1] retained');
+  f.sql(`UPDATE conversations SET timestamp='${new Date().toISOString()}'`);
+  f.checkpoint(1, 'telegram:a', 1, 2);
+  const root = path.resolve(import.meta.dirname, '..');
+  const module = pathToFileURL(path.join(root, 'scripts/materials.js')).href;
+  const producer = `import * as materials from ${JSON.stringify(module)};
+    const run=materials.collectMaterials(${JSON.stringify(f.config)},{}, {zylos_dir:process.env.ZYLOS_DIR,time_zone:'UTC'});
+    materials.traceMaterials(${JSON.stringify(f.config)},{},run,[]);
+    delete run.filters.exclude_scheduled_tasks;
+    materials.saveArtifact(${JSON.stringify(path.join(f.env.ZYLOS_DIR, 'components/thinking-patterns/materials'))},run);`;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', producer], { env: f.env, encoding: 'utf8', timeout: 20000, maxBuffer: 1024 * 1024 });
+  assert.equal(child.status, 0, child.stderr);
+  fs.writeFileSync(path.join(f.env.ZYLOS_DATA_DIR, 'config.json'), JSON.stringify(f.config));
+  const result = JSON.parse(f.invoke(path.join(root, 'scripts/reflect.js'), ['fetch']));
+  assert.equal(result.report.reused_ranges, 0);
+  assert.equal(result.report.reuse_misses[0].reason, 'filters_mismatch');
+  assert.equal(result.inbound.length, 1);
+  assert.equal(result.inbound[0].id, 2);
+  assert.equal(result.filters.exclude_scheduled_tasks, true);
+});

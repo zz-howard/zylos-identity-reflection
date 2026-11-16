@@ -13,6 +13,7 @@ opened by the component.
 The background agent reads memory and channel-filtered inbound originals, selects
 correction clues, and fetches bounded same-thread context. Completed, exactly
 matching thinking-patterns material is reused before reading logs or originals.
+Inbound collection excludes stored content starting with `[Scheduled Task:`; the marker elsewhere is retained and trace context is unchanged. Artifacts missing this filter are recollected.
 Only errors are recorded in the compact ledger. An error type must appear in at
 least two distinct threads and two distinct dates before it may change
 `Personality & Behavioral Traits`; all other identity sections remain unchanged.
