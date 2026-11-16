@@ -43,7 +43,7 @@ Data lives in `~/zylos/components/identity-reflection`. Defaults include:
 `identity_file`, `c4_db_cli`, `c4_fetch_cli`, `memory_writer`, `rotation_script`
 and `thinking_patterns_data_dir` default to the corresponding Zylos paths. Existing
 policy prose is preserved. The updated SKILL workflow and CLI enforce error
-thresholds, section boundaries and the combined 16 KiB identity/references budget.
+thresholds, section boundaries and identity's own 16 KiB budget (references is separate).
 
 State schema 2 uses `groups[group].end_conversation_id` and `checkpoint_id`.
 Upgrading discards the old global cursor and old backlog, starting within the

@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 if (process.argv.includes('--reason')) {
   fs.appendFileSync(process.env.FIXTURE_CALLS, 'rotation\n');
   if (process.env.FIXTURE_ROTATION_REJECT === '1') { console.error('TRANSITION_OPEN'); process.exitCode = 1; }
+  else if (process.env.FIXTURE_ROTATION_EMPTY === '1') { console.log('OK: enqueued 0 rotation controls\nSKIPPED: telegram:room TARGET_NOT_RUNNING\nSKIPPED: origin TRANSITION_OPEN'); }
   else console.log('OK: enqueued 1 rotation controls');
 } else if (process.env.FIXTURE_SYNC_BUSY === '1') {
   console.log(JSON.stringify({ ok: false, error: { code: 'SYNC_BUSY' } }));

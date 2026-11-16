@@ -35,7 +35,7 @@ test('real locked writer rejects active Sync and absorbs evidence only after pub
   const coreWriter = pathToFileURL(path.join(core, 'skills/zylos-memory/scripts/memory-write.js')).href;
   fs.writeFileSync(writer, `import {runMemoryWriteCli} from ${JSON.stringify(coreWriter)}; process.exitCode=await runMemoryWriteCli(process.argv.slice(2), {currentRunId: async()=> 'fixture-run'});`);
   const rotation = path.join(root, 'rotation.mjs');
-  fs.writeFileSync(rotation, `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(path.join(root, 'rotation-requested'))},process.argv.slice(2).join(' '));`);
+  fs.writeFileSync(rotation, `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(path.join(root, 'rotation-requested'))},process.argv.slice(2).join(' ')); console.log('OK: enqueued 1 rotation controls');`);
   const config = { identity_file: identity, memory_writer: writer, rotation_script: rotation, ledger_min_groups: 2, ledger_min_dates: 2, ledger_expiry_days: 60 };
   const markerDir = path.join(env.ZYLOS_DIR, 'activity-monitor/session-groups/origin');
   fs.mkdirSync(markerDir, { recursive: true });
@@ -60,6 +60,7 @@ test('real locked writer rejects active Sync and absorbs evidence only after pub
   fs.unlinkSync(marker);
   const success = invoke(`console.log(JSON.stringify(ledger.writeIdentity(${JSON.stringify(options)},config)));`);
   assert.equal(success.status, 'updated');
+  assert.equal(success.rotation.status, 'rotation_requested');
   assert.equal(fs.readFileSync(identity, 'utf8'), fs.readFileSync(proposed, 'utf8'));
   const absorbed = fs.readFileSync(path.join(env.ZYLOS_DATA_DIR, 'ledger.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   assert.ok(absorbed.every(row => row.absorbed));

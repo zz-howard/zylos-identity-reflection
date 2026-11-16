@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Compact error ledger with distinct-thread/date thresholds, absorption and stale-type expiry.
-- Hash-checked personality-only identity writes using Core's locked memory writer when available, shared identity budget validation and rotation reporting.
+- Hash-checked personality-only identity writes using Core's locked memory writer when available, identity budget validation and rotation reporting.
 - Bounded same-thread trace continuation, artifact retention and material volume reports.
 
 ## [0.1.5] - 2026-11-06

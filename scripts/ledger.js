@@ -71,12 +71,17 @@ function section(text) {
 }
 function child(script, args, input) {
   const result = spawnSync(process.execPath, [script, ...args], { input, encoding: 'utf8', timeout: 30000, maxBuffer: 1024 * 1024 });
-  return { ok: result.status === 0 && !result.error, exit_code: result.status, output: result.stdout.trim(), error: result.error?.message || result.stderr.trim() };
+  return { ok: result.status === 0 && !result.error, exit_code: result.status, output: (result.stdout || '').trim(), error: result.error?.message || (result.stderr || '').trim() };
 }
 export function retryRotation(config) {
   const state = loadState();
   if (!state.rotation_pending) return { status: 'skip', reason: 'no_pending_rotation' };
   const rotation = fs.existsSync(config.rotation_script) ? child(config.rotation_script, ['--reason', 'identity']) : { ok: false, error: 'request-rotation.js is unavailable' };
+  const count = /^OK: enqueued (\d+) rotation controls$/m.exec(rotation.output || '');
+  rotation.enqueued = count ? Number(count[1]) : 0;
+  rotation.skipped = [...(rotation.output || '').matchAll(/^SKIPPED: (\S+) (.+)$/gm)].map(([, session_group, reason]) => ({ session_group, reason }));
+  rotation.ok = rotation.ok && rotation.enqueued > 0;
+  if (!rotation.ok && !rotation.error) rotation.error = count ? 'No rotation controls were enqueued' : 'Rotation enqueue count is unavailable';
   state.rotation_pending = !rotation.ok;
   writeJson(STATE_PATH, state);
   return { status: rotation.ok ? 'rotation_requested' : 'rotation_deferred', rotation };
@@ -102,9 +107,7 @@ export function writeIdentity({ file, sha256, types }, config) {
   const before = section(identity.toString('utf8')), after = section(replacement.toString('utf8'));
   if (before.prefix !== after.prefix || before.suffix !== after.suffix) throw new Error('Only Personality & Behavioral Traits may change');
   if (before.body === after.body) throw new Error('Identity proposal has no personality changes');
-  const references = path.join(ZYLOS_DIR, 'memory/references.md');
-  const referenceBytes = fs.existsSync(references) ? fs.statSync(references).size : 0;
-  if (replacement.length + referenceBytes > 16384) throw new Error('Identity and references exceed the 16 KiB shared budget; merge existing traits');
+  if (replacement.length > 16384) throw new Error('Identity exceeds its 16 KiB budget; merge existing traits');
   // Save the expected result before the writer so a stopped run can reconcile it.
   const state = loadState();
   state.identity_write_pending = { file: config.identity_file, sha256: hash(replacement), types: [...new Set(types)], evidence: entries().filter(row => types.includes(row.type) && !row.absorbed).map(evidenceKey) };
