@@ -4,140 +4,99 @@
 
 <h1 align="center">zylos-identity-reflection</h1>
 
-<p align="center">
-  Periodic identity reflection component for Zylos agents.
-</p>
+Nightly reflection on repeated errors, using checkpoint-covered memory and C4
+context. Requires Node.js 20+ and comm-bridge/scheduler CLIs. No C4 database is
+opened by the component.
 
----
+## Flow
 
-`zylos-identity-reflection` turns the long inline identity-reflection scheduler prompt into an installable Zylos utility component. It keeps a cursor over unprocessed C4 conversations, waits until enough new conversation volume has accumulated, and then asks a background subagent to decide whether stable identity traits have changed.
+The background agent reads memory and channel-filtered inbound originals, selects
+correction clues, and fetches bounded same-thread context. Completed, exactly
+matching thinking-patterns material is reused before reading logs or originals.
+Inbound collection excludes stored content starting with `[Scheduled Task:`; the marker elsewhere is retained and trace context is unchanged. Artifacts missing this filter are recollected.
+Only errors are recorded in the compact ledger. An error type must appear in at
+least two distinct threads and two distinct dates before it may change
+`Personality & Behavioral Traits`; all other identity sections remain unchanged.
 
-The component never updates identity automatically from script logic. The script fetches conversations and maintains state; the agent applies judgment and may update only the `Personality & Behavioral Traits` section of `memory/identity.md`.
-
-## System Requirements
-
-- Node.js, provided by the Zylos runtime.
-- `sqlite3` CLI, used to inspect the C4 and scheduler SQLite databases.
-
-Install `sqlite3` on Debian/Ubuntu systems with:
-
-```bash
-apt-get install sqlite3
-```
-
-On macOS with Homebrew:
-
-```bash
-brew install sqlite3
-```
-
-On Core versions with conversation projection, structured history messages
-appear as readable text. Earlier Core versions already provide plain-text
-history, so reflection works as usual with no minimum Core version requirement.
-The component passes Core fetch output unchanged to the reflection agent; it
-does not project the transcript a second time.
-
-## Install
-
-```bash
-zylos add identity-reflection
-```
-
-The post-install hook creates:
-
-- `~/zylos/components/identity-reflection/config.json`
-- `~/zylos/components/identity-reflection/policy.md`
-- `~/zylos/components/identity-reflection/state.json`
-- `~/zylos/components/identity-reflection/logs/`
-- a recurring scheduler task named `identity-reflection`
-
-It also pauses the old long-prompt identity-reflection task when it matches the legacy prompt fingerprint.
+Installation and upgrade register one nightly `30 0 * * *` task. Stale managed
+tasks are removed through scheduler CLI. Custom same-name tasks with different
+prompts are preserved. Thinking-patterns tasks are untouched. No manual legacy
+task fingerprints are recognized.
 
 ## Configuration
 
-Edit `~/zylos/components/identity-reflection/config.json`:
+Data lives in `~/zylos/components/identity-reflection`. Defaults include:
 
 ```json
 {
   "enabled": true,
-  "min_conversations": 50,
-  "identity_file": "~/zylos/memory/identity.md",
-  "c4_db": "~/zylos/comm-bridge/c4.db",
-  "c4_fetch_script": "~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js"
+  "exclude_channels": ["internal", "system", "void", "multica"],
+  "trace_max_clues": 15,
+  "trace_context": 8,
+  "trace_max_bytes": 262144,
+  "artifact_retention_days": 7,
+  "ledger_min_groups": 2,
+  "ledger_min_dates": 2,
+  "ledger_expiry_days": 60
 }
 ```
 
-`min_conversations` controls the threshold for running reflection. If fewer unprocessed conversations are available, the run is recorded as `skip` and the processed cursor is not advanced.
+`identity_file`, `c4_db_cli`, `c4_fetch_cli`, `memory_writer`, `rotation_script`
+and `thinking_patterns_data_dir` default to the corresponding Zylos paths. Existing
+policy prose is preserved. The updated SKILL workflow and CLI enforce error
+thresholds, section boundaries and identity's own 16 KiB budget (references is separate).
 
-## Policy
+State schema 2 uses `groups[group].end_conversation_id` and `checkpoint_id`.
+Upgrading discards the old global cursor and old backlog, starting within the
+recent day. Checkpoint failure or missing group metadata produces an explicit
+skip, preserving all progress. There is no sender identification.
 
-Edit `~/zylos/components/identity-reflection/policy.md` to customize identity conflict resolution. The default policy gives the owner's direct feedback absolute priority and requires stable evidence rather than single events.
+## Commands
 
-## CLI
+See [SKILL.md](SKILL.md) for the complete background-agent workflow. Commands:
 
-Fetch unprocessed conversations:
-
-```bash
-node ~/zylos/.claude/skills/identity-reflection/scripts/reflect.js fetch
+```sh
+node scripts/reflect.js fetch
+node scripts/reflect.js trace --run RUN --clues clues.json
+node scripts/reflect.js ledger append --file errors.json
+node scripts/reflect.js ledger list --type premature-conclusion
+node scripts/reflect.js ledger clean
+node scripts/reflect.js write-identity --file proposal.md --sha256 HASH --types types.json
+node scripts/reflect.js rotation
+node scripts/reflect.js commit --run RUN --result no_change --groups groups.json
 ```
 
-Commit a skipped run without advancing the processed cursor:
+Ledger entries contain only type, date, thread, C4 id, one short quote and
+absorption state. `ledger absorb --type TYPE` requires a successful identity-write
+receipt and applies only to evidence present at that write. Writer refusal leaves
+the ledger intact; rotation refusal remains pending for retry. Old Core without
+the writer uses an explicitly reported legacy replacement.
 
-```bash
-node ~/zylos/.claude/skills/identity-reflection/scripts/reflect.js commit --result skip --observed-end-id 123
-```
-
-Commit a processed run:
-
-```bash
-node ~/zylos/.claude/skills/identity-reflection/scripts/reflect.js commit --result no_change --end-id 123
-node ~/zylos/.claude/skills/identity-reflection/scripts/reflect.js commit --result updated --end-id 123
-```
-
-All CLI output is JSON. State writes are atomic.
-
-## Runtime Model
-
-The scheduler task dispatches the skill. The main session launches a background subagent, and the subagent performs the fetch/analyze/update/commit flow. This keeps reflection work out of the main loop and avoids blocking heartbeat delivery.
-
-## State
-
-`state.json` tracks:
-
-- `last_processed_id`: cursor advanced only after `no_change` or `updated`
-- `last_observed_id`: latest ID observed during fetches, including skipped runs
-- `last_run_at`
-- `last_result`
-- `last_identity_update_at`
-- `scheduler_prompt_hash`
-
-Run entries are appended to `logs/runs.jsonl`.
-
-## License
-
-[MIT](./LICENSE)
+Artifacts and volume reports are documented in [references/materials.md](references/materials.md).
 
 ## Tests
 
-The default tests are self-contained and need no Core checkout or Core-related
-environment variables. They use a fake history CLI in
-private temporary directories (the sqlite3 CLI is still required):
+`npm test` runs explicit `.test.js` files with temporary HOME, ZYLOS_DIR,
+ZYLOS_DATA_DIR, PM2_HOME and TMPDIR, private CLI fixtures, bounded child-process
+timeouts and no live service/database access. `npm run check` checks syntax.
+Real-Core integration requires an existing current Core checkout with its protocol
+fixture and dependencies, an older Core checkout without checkpoint/group APIs,
+and `sqlite3`. The tests initialize matching private database schemas; never point
+them at a live instance. They isolate HOME, ZYLOS_DIR, ZYLOS_DATA_DIR, PM2_HOME,
+short TMPDIR and TMUX_TMPDIR, check target paths before starting children, apply
+timeouts and remove owned resources. No runtime, tmux server or network starts.
 
-```bash
-npm test
+```sh
+ZYLOS_PACKAGE_ROOT=/path/to/current-core \
+TEST_LEGACY_CORE_ROOT=/path/to/older-core npm run test:integration
 ```
 
-The real-Core projection tests are opt-in. Use the current `multi-session/chat` Core checkout with its existing
-development dependencies, and an older Core checkout at `6436b3e2` without the
-public projection module. Both checkouts need their existing Core dependencies.
-The tests import the structured-message prefix from the current Core schema. Do not install either into a live instance. Keep the
-component's `v0.1.5` Git tag available for the byte-for-byte baseline.
-Run in temporary HOME, ZYLOS_DIR, PM2_HOME and short TMPDIR directories; cases
-create private C4 databases beneath TMPDIR and clean them up. No model,
-runtime, PM2, tmux or network is started.
+`projected-history.test.js` covers checkpoint projection and unsupported Core;
+`locked-writer.test.js` covers the actual Core memory lock, rejection and successful
+absorption; `material-reuse.test.js` covers producer/consumer artifact reuse with
+real checkpoint CLIs. Each file documents when its boundary needs retesting.
+Real DGX one-day volumes remain a reviewer-run acceptance check.
 
-```bash
-ZYLOS_PACKAGE_ROOT=/path/to/core-checkout \
-TEST_LEGACY_CORE_ROOT=/path/to/older-core \
-npm run test:integration
-```
+## License
+
+[MIT](LICENSE)

@@ -8,7 +8,7 @@ const HOME = os.homedir();
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(HOME, 'zylos');
 const DATA_DIR = process.env.ZYLOS_DATA_DIR || path.join(ZYLOS_DIR, 'components/identity-reflection');
 const BACKUP_DIR = path.join(DATA_DIR, 'backups', new Date().toISOString().replace(/[:.]/g, '-'));
-const FILES = ['config.json', 'policy.md', 'state.json'];
+const FILES = ['config.json', 'policy.md', 'state.json', 'ledger.jsonl'];
 
 console.log('[pre-upgrade] Backing up identity-reflection data...');
 
