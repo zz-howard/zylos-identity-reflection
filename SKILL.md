@@ -83,9 +83,11 @@ The subagent owns the actual reflection work:
    without keyword rules or sender identification.
 4. Save uncovered clues as a JSON array of `{session_group,c4_id,kind:"correction"}`.
    Run `reflect.js trace --run <run_id> --clues <file>`, then read its traces.
-   Trace limits defer excess clues to state. On later runs, process those first;
-   call trace with an empty array to continue. Never commit an unfinished group.
-   Fetch resumes the active run; `completed_groups` must not be processed again.
+   Trace limits apply cumulatively to this run and defer excess clues to state.
+   Commit reviewed ranges after selection even when clues remain deferred. The
+   next run processes those clues first while collecting new checkpoint ranges.
+   Do not repeat trace calls to bypass limits. `completed_groups` must not be
+   processed again within the active run.
    Even if no clues were found, call trace with `[]` to record completion.
 5. Add only newly discovered errors using `reflect.js ledger append --file <file>`.
    Each array entry contains `type,date,session_group,c4_id,quote`. Use one short

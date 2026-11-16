@@ -195,6 +195,8 @@ test('reflection reuses matching corrections without raw reads and fills uncover
   assert.equal(reused.session_files.length, 0);
   assert.equal(reused.clues.length, 1);
   assert.equal(reused.clues[0].kind, 'correction');
+  assert.equal(reused.trace_report.clues, 1);
+  assert.ok(reused.trace_report.bytes > 0);
   assert.doesNotMatch(fs.readFileSync(f.calls, 'utf8'), /--since|--begin/);
   assert.equal(f.invoke(['commit', '--run', reused.run_id, '--result', 'no_change']).code, 0);
   f.set({ groups: ['A', 'B'], checkpoints: [{ id: 1, session_group: 'A', start_conversation_id: 1, end_conversation_id: 10 }, { id: 2, session_group: 'B', start_conversation_id: 11, end_conversation_id: 20 }], rows: [{ id: 20, session_group: 'B', channel: 'telegram', direction: 'in', timestamp: now, content: 'Please verify this conclusion.' }] });
@@ -225,7 +227,7 @@ test('first upgraded reflection ignores old global backlog and only reads the re
   assert.equal(state.last_processed_id, undefined);
 });
 
-test('reflection resumes bounded traces and retains partial ranges until every group commits', t => {
+test('reflection carries bounded deferred clues into fresh checkpoint ranges', t => {
   const f = fixture(t, { trace_max_clues: 1, trace_context: 1 });
   const timestamp = new Date().toISOString();
   f.set({ groups: ['A', 'B'], checkpoints: [
@@ -238,24 +240,36 @@ test('reflection resumes bounded traces and retains partial ranges until every g
   const run = f.invoke(['fetch']).value;
   const clues = f.json('clues.json', ['A', 'B'].map((session_group, i) => ({ session_group, c4_id: (i + 1) * 10, kind: 'correction' })));
   assert.equal(f.invoke(['trace', '--clues', clues]).value.trace_report.deferred, 1);
-  assert.equal(f.invoke(['commit', '--result', 'no_change']).code, 1);
-  assert.equal(f.invoke(['commit', '--result', 'no_change', '--groups', f.json('groups.json', ['A'])]).code, 0);
+  assert.equal(f.invoke(['trace', '--clues', f.json('empty.json', [])]).value.traces.length, 1);
+  assert.equal(f.invoke(['commit', '--result', 'no_change', '--groups', 'A,B']).code, 0);
+  f.set({ groups: ['A', 'B'], checkpoints: [
+    { id: 1, session_group: 'A', end_conversation_id: 10 },
+    { id: 2, session_group: 'B', end_conversation_id: 20 },
+    { id: 3, session_group: 'A', end_conversation_id: 30 }
+  ], rows: [
+    { id: 20, session_group: 'B', timestamp, channel: 'telegram', direction: 'in', content: 'Correction B' },
+    { id: 30, session_group: 'A', timestamp, channel: 'telegram', direction: 'in', content: 'New correction A' }
+  ] });
   const resumed = f.invoke(['fetch']).value;
-  assert.equal(resumed.run_id, run.run_id);
-  assert.equal(resumed.completed_groups.join(','), 'A');
+  assert.notEqual(resumed.run_id, run.run_id);
+  assert.equal(resumed.ranges[0].end, 30);
+  assert.equal(resumed.inbound[0].id, 30);
   const artifactFile = path.join(f.data, 'materials', `${run.run_id}.json`);
-  assert.equal(JSON.parse(fs.readFileSync(artifactFile)).committed, false);
-  assert.equal(f.invoke(['trace', '--clues', f.json('empty.json', [])]).value.traces.length, 2);
+  assert.equal(JSON.parse(fs.readFileSync(artifactFile)).committed, true);
+  assert.equal(f.invoke(['trace', '--clues', f.json('empty.json', [])]).value.traces[0].clue.c4_id, 20);
   assert.equal(f.invoke(['commit', '--result', 'no_change']).code, 0);
   assert.equal(JSON.parse(fs.readFileSync(artifactFile)).committed, true);
   assert.equal(f.invoke(['trace', '--run', run.run_id, '--clues', f.json('empty.json', [])]).code, 1);
   assert.equal(f.invoke(['fetch']).value.status, 'skip');
   const log = fs.readFileSync(path.join(f.data, 'logs/runs.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).at(-1);
   assert.equal(log.trace_report.deferred, 0);
-  assert.equal(log.report.inbound.count, 2);
+  assert.equal(log.report.inbound.count, 1);
   const expired = JSON.parse(fs.readFileSync(artifactFile));
   expired.created_at = '2000-01-01T00:00:00Z';
   fs.writeFileSync(artifactFile, JSON.stringify(expired));
+  f.set({ groups: ['A'], checkpoints: [{ id: 4, session_group: 'A', end_conversation_id: 31 }], rows: [
+    { id: 31, session_group: 'A', timestamp, channel: 'telegram', direction: 'in', content: 'Next material' }
+  ] });
   f.invoke(['fetch']);
   assert.equal(fs.existsSync(artifactFile), false);
 });

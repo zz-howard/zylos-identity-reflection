@@ -5,7 +5,7 @@ The shared schema is the same as thinking-patterns: `schema_version: 1`,
 `run_id`, `created_at`, `mode`, `ranges`, `session_files`, `reference_files`,
 `inbound`, `filters`, `clues`, `traces`, `trace_complete`, `report` and
 `trace_report`. A range is `{session_group,after,end,checkpoint_id}` with optional
-time boundaries. Clues are `{session_group,c4_id,kind}`. Traces hold the clue,
+time boundaries. Clues are `{session_group,c4_id,kind,source_range}`. Traces hold the clue,
 same-thread rows and volume report. The collector lists changed memory paths;
 the agent reads them only when needed. Core-projected text is never reprojected.
 
@@ -13,14 +13,27 @@ The reflection consumer reads thinking-patterns' `materials/` artifacts. It
 reuses corrections and their traces only when range and channel filters match
 exactly and trace processing completed. It collects all uncovered ranges itself.
 `report.reused_ranges` and zero inbound/session sizes prove successful reuse.
+`report.reuse_misses` lists each uncovered thread with `range_mismatch`,
+`filters_mismatch`, or `thinking_patterns_incomplete`.
 Both components retain completed artifacts for seven days by default; incomplete
 artifacts and state-held pending clues are retained for continuation.
 Fetch resumes an active artifact until its ranges have all committed. Partial
-commits expose `completed_groups`; only fully committed artifacts are expired.
+commits expose `completed_groups`; committed or explicitly closed artifacts expire.
+Deferred clues retain their original source range in state and artifact
+`deferred_clues`, and do not prevent checkpoint advancement or new ranges on
+the next fetch. Trace limits and reports accumulate across the entire run.
+The first trace is accepted even when oversized. Sparse-thread expansion stops
+within 2,000 C4 IDs of the clue and 1,000 before its original range, which may
+return fewer context rows. A global content checkpoint identifies single-session
+mode unless current Core configuration selects multi-session mode; rows keep
+actual component groups, clues normalize to `*`, and logs use `memory/sessions/`.
 
-Core channel wrappers are stripped only through explicit delimiter tags
-(`smart-mode`, `group-context`, `thread-context`, `replying-to`, and the
-`current-message` boundary). Author signatures remain. There is no keyword or
+Telegram `src/lib/context.js:205-241` emits a header and sender signature before
+context blocks and `current-message`. OpenMax `src/lib/message.js:218-254,302-366`
+emits its header, self-closing `org-context`, `message-context`, `sender-context`,
+and `openmax-instruction`, with sender inside `current-message`. The collector
+preserves both headers and signatures, removes explicit structural context
+blocks, keeps trailing media, and decodes XML entities once. There is no keyword or
 sender filter. Default excluded channels are internal/system/void/multica.
 
 `ledger.jsonl` stores `{type,date,session_group,c4_id,quote,absorbed}`. Dates use
