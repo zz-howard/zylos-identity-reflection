@@ -23,13 +23,21 @@ exactly and the producer finished clue selection (its artifact has `trace_report
 which trace records even for an empty clue list), regardless of the producer's
 overall trace completeness. Deferred
 correction clues are traced locally under a separate cumulative allowance;
-deferred decisions are ignored. It collects only uncovered ranges itself.
+deferred decisions are ignored. It collects only uncovered ranges and the
+newer tails described below itself. When no artifact matches the full range but one with the same start, filters and
+finished clue selection ends earlier (a checkpoint arrived after the producer
+ran), the longest such prefix is reused and only messages after it are
+collected; the range carries `reused_through` and counts in
+`partially_reused_ranges`, not `reused_ranges` or `reuse_misses`. A thread with
+no previous progress (first run) is not prefix-reused; it keeps the 24-hour
+bootstrap window.
 Inbound collection rejects only stored content starting with `[Scheduled Task:` before wrapper extraction; the marker elsewhere is retained and trace context is unchanged. `filters.exclude_scheduled_tasks: true` records this contract. Older artifacts without that field fail filter matching and are recollected.
 `report.reused_ranges` and zero inbound/session sizes prove successful reuse.
 `report.reuse_misses` lists each uncovered thread with `range_mismatch`,
 `filters_mismatch`, or `clue_selection_unfinished` (matching producer runs had
 not selected clues yet). `collected_ranges` counts fully collected threads and
-`supplemental_traces` counts locally traced reused correction clues.
+`supplemental_traces` counts locally traced reused correction clues (not newly
+selected tail clues).
 Both components retain completed artifacts for seven days by default; incomplete
 artifacts and state-held pending clues are retained for continuation.
 Fetch resumes an active artifact until its ranges have all committed. Partial

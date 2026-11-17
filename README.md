@@ -11,8 +11,9 @@ opened by the component.
 ## Flow
 
 The background agent reads memory and channel-filtered inbound originals, selects
-correction clues, and fetches bounded same-thread context. Completed, exactly
-matching thinking-patterns material is reused before reading logs or originals.
+correction clues, and fetches bounded same-thread context. Completed, matching
+thinking-patterns material is reused before reading logs or originals; when a
+thread gained a checkpoint after that run, only the newer messages are collected.
 Inbound collection excludes stored content starting with `[Scheduled Task:`; the marker elsewhere is retained and trace context is unchanged. Artifacts missing this filter are recollected.
 Only errors are recorded in the compact ledger. An error type must appear on at
 least two distinct dates (in any threads) before it may change
