@@ -49,13 +49,16 @@ function proposal(f, body = 'Verify evidence before concluding.') {
   return ['write-identity', '--file', file, '--sha256', hash(before), '--types', f.json('types.json', ['premature-conclusion'])];
 }
 
-test('ledger requires distinct threads and distinct dates and deduplicates evidence', t => {
+test('ledger requires distinct dates in any threads and deduplicates evidence', t => {
   const f = fixture(t);
-  const a = errorRow('A', '2026-11-14', 10), b = errorRow('A', '2026-11-15', 11);
+  // An older config may still carry a thread threshold; it no longer applies.
+  const configFile = path.join(f.data, 'config.json');
+  fs.writeFileSync(configFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(configFile)), ledger_min_groups: 2 }));
+  const a = errorRow('A', '2026-11-14', 10), b = errorRow('A', '2026-11-14', 11);
   assert.equal(append(f, [a, b, a]).value.added, 2);
   assert.equal(f.invoke(['ledger', 'list']).value.thresholds[0].eligible, false);
   assert.equal(f.invoke(proposal(f)).code, 1);
-  append(f, [errorRow('B', '2026-11-15', 12)]);
+  append(f, [errorRow('A', '2026-11-15', 12)]);
   assert.equal(f.invoke(['ledger', 'list']).value.thresholds[0].eligible, true);
   assert.equal(f.invoke(['ledger', 'absorb', '--type', a.type]).code, 1);
 });

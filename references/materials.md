@@ -67,7 +67,7 @@ references counts as zero; an unavailable stat reports null combined values and
 `ledger.jsonl` stores `{type,date,session_group,c4_id,quote,absorbed}`. Dates use
 the run's configured timezone. Quotes are single lines up to 500 characters.
 Duplicates use type/date/thread/C4 id. Only unabsorbed entries contribute to the
-distinct-thread and distinct-date thresholds. The latest occurrence of each type
+distinct-date threshold (threads are not counted). The latest occurrence of each type
 controls its 60-day expiry, including absorbed history. No historical transcripts
 or narratives are stored here. A successful writer receipt identifies precisely
 the ledger evidence that may be absorbed; later errors cannot reuse that receipt.

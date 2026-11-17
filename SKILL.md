@@ -105,7 +105,7 @@ The subagent owns the actual reflection work:
    Each array entry contains `type,date,session_group,c4_id,quote`. Use one short
    quote, no event narrative. Group by error type, not similar-looking events.
 6. `reflect.js ledger list --type <type>` compares the new error with the ledger.
-   Default eligibility requires two distinct threads AND two distinct dates.
+   Default eligibility requires two distinct dates, in any threads.
    Also handle eligible `pending_error_types` retained from a deferred write.
    Never reread historical original conversations to establish repetition.
 7. For an eligible type, read the current identity in full and hash its raw bytes.

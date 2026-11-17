@@ -36,7 +36,7 @@ test('real locked writer rejects active Sync and absorbs evidence only after pub
   fs.writeFileSync(writer, `import {runMemoryWriteCli} from ${JSON.stringify(coreWriter)}; process.exitCode=await runMemoryWriteCli(process.argv.slice(2), {currentRunId: async()=> 'fixture-run'});`);
   const rotation = path.join(root, 'rotation.mjs');
   fs.writeFileSync(rotation, `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(path.join(root, 'rotation-requested'))},process.argv.slice(2).join(' ')); console.log('OK: enqueued 1 rotation controls');`);
-  const config = { identity_file: identity, memory_writer: writer, rotation_script: rotation, ledger_min_groups: 2, ledger_min_dates: 2, ledger_expiry_days: 60 };
+  const config = { identity_file: identity, memory_writer: writer, rotation_script: rotation, ledger_min_dates: 2, ledger_expiry_days: 60 };
   const markerDir = path.join(env.ZYLOS_DIR, 'activity-monitor/session-groups/origin');
   fs.mkdirSync(markerDir, { recursive: true });
   const marker = path.join(markerDir, 'sync.lock');
