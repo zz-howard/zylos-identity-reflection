@@ -309,6 +309,63 @@ test('hooks remove stale managed tasks including paused duplicates and preserve 
 });
 
 const FILTERS = { channels: null, exclude_channels: ['internal', 'system', 'void', 'multica'], exclude_scheduled_tasks: true };
+// Private fixture CLI integration: run for artifact reuse, trace-budget or
+// scope changes; skip unrelated scheduling. No live database or service starts.
+for (const group of ['A', '*']) test(`partial producer corrections reuse ${group} with an independent trace budget`, t => {
+  const f = fixture(t, { trace_max_clues: 1, trace_context: 1 });
+  const ranges = [{ session_group: group, after: 0, end: 3, checkpoint_id: 1 }, ...(group === '*' ? [] : [{ session_group: 'B', after: 0, end: 4, checkpoint_id: 2 }])];
+  const clue = id => ({ session_group: group, c4_id: id, kind: 'correction' });
+  const traced = clue(1), deferred = clue(2), other = { ...clue(3), kind: 'decision' };
+  const dir = path.join(f.zylos, 'components/thinking-patterns/materials');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'abcdef01.json'), JSON.stringify({ run_id: 'abcdef01', created_at: new Date().toISOString(), trace_complete: false, filters: FILTERS, ranges, clues: [traced, deferred, other], deferred_clues: [deferred, other], traces: [{ clue: traced, rows: [], report: { characters: 0 } }] }));
+  f.set({ groups: ranges.map(r => r.session_group), checkpoints: ranges.map((r, i) => ({ id: i + 1, session_group: r.session_group, end_conversation_id: r.end })), rows: [1, 2, 3].map(id => ({ id, session_group: group, timestamp: new Date().toISOString(), channel: 'telegram', direction: 'in', content: `Correction ${id}` })) });
+  const fetched = f.invoke(['fetch']).value;
+  assert.equal(fetched.report.reused_ranges, ranges.length);
+  assert.equal(fetched.report.reuse_misses.length, 0);
+  assert.equal(fetched.report.inbound.count, 0);
+  assert.equal(fetched.report.sessions.count, 0);
+  assert.equal(fetched.clues.length, 2);
+  assert.equal(fetched.trace_complete, false);
+  assert.doesNotMatch(fs.readFileSync(f.calls, 'utf8'), /--since|--begin/);
+  const result = f.invoke(['trace', '--clues', f.json('empty.json', [])]);
+  assert.equal(result.code, 0, JSON.stringify(result.value));
+  assert.equal(result.value.traces.length, 2);
+  assert.equal(result.value.trace_complete, true);
+  assert.equal(result.value.report.supplemental_traces, 1);
+  assert.equal(result.value.traces.at(-1).clue.c4_id, 2);
+  assert.equal(f.invoke(['commit', '--result', 'no_change']).code, 0);
+});
+test('deferred decisions alone do not block correction reuse', t => {
+  const f = fixture(t);
+  const ranges = [{ session_group: 'A', after: 0, end: 3, checkpoint_id: 1 }];
+  tpArtifact(f, ranges);
+  const file = path.join(f.zylos, 'components/thinking-patterns/materials/abcdef01.json');
+  const material = JSON.parse(fs.readFileSync(file));
+  material.trace_complete = false;
+  material.clues = material.deferred_clues = [{ session_group: 'A', c4_id: 3, kind: 'decision' }];
+  fs.writeFileSync(file, JSON.stringify(material));
+  f.set({ groups: ['A'], checkpoints: [{ id: 1, session_group: 'A', end_conversation_id: 3 }], rows: [] });
+  const fetched = f.invoke(['fetch']).value;
+  assert.equal(fetched.trace_complete, true);
+  assert.equal(fetched.clues.length, 0);
+  assert.equal(fetched.report.reused_ranges, 1);
+  assert.doesNotMatch(fs.readFileSync(f.calls, 'utf8'), /--since|--begin/);
+});
+test('only an incompatible range is recollected beside a partially traced producer', t => {
+  const f = fixture(t);
+  tpArtifact(f, [{ session_group: 'A', after: 0, end: 3, checkpoint_id: 1 }, { session_group: 'B', after: 0, end: 4, checkpoint_id: 2 }]);
+  const file = path.join(f.zylos, 'components/thinking-patterns/materials/abcdef01.json');
+  const material = JSON.parse(fs.readFileSync(file)); material.trace_complete = false; fs.writeFileSync(file, JSON.stringify(material));
+  f.set({ groups: ['A', 'B'], checkpoints: [{ id: 1, session_group: 'A', end_conversation_id: 3 }, { id: 2, session_group: 'B', end_conversation_id: 5 }], rows: [{ id: 5, session_group: 'B', channel: 'telegram', direction: 'in', timestamp: new Date().toISOString(), content: 'Correction' }] });
+  const fetched = f.invoke(['fetch']).value;
+  assert.equal(fetched.report.reused_ranges, 1);
+  assert.equal(fetched.report.reuse_misses.length, 1);
+  assert.equal(fetched.report.reuse_misses[0].session_group, 'B');
+  assert.equal(fetched.report.reuse_misses[0].reason, 'range_mismatch');
+  assert.equal(fetched.inbound.length, 1);
+  assert.equal(fetched.inbound[0].session_group, 'B');
+});
 function tpArtifact(f, ranges) {
   const dir = path.join(f.zylos, 'components/thinking-patterns/materials'); fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'abcdef01.json'), JSON.stringify({ schema_version: 1, run_id: 'abcdef01', created_at: new Date().toISOString(), trace_complete: true, filters: FILTERS, ranges, clues: [], traces: [] }));

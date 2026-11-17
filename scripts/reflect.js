@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { collectMaterials, traceMaterials, commitMaterials, saveArtifact, readArtifacts, materialFailureReason } from './materials.js';
 import { DATA_DIR, ZYLOS_DIR, loadConfig, loadState, writeJson, STATE_PATH } from './settings.js';
-import { appendErrors, listErrors, cleanLedger, absorbErrors, writeIdentity, retryRotation, recoverIdentityWrite } from './ledger.js';
+import { appendErrors, listErrors, cleanLedger, absorbErrors, coverErrors, identityOutcomeForRun, writeIdentity, retryRotation, recoverIdentityWrite } from './ledger.js';
 
 const MATERIAL_DIR = path.join(DATA_DIR, 'materials');
 
@@ -48,7 +48,8 @@ function run() {
       catch (error) { return { status: 'skip', mode: 'unsupported_core', reason: materialFailureReason(error), fallback_detail: error.message, groups_preserved: true, ...pending }; }
       material.clues = material.reused.flatMap(item => item.clues);
       material.traces = material.reused.flatMap(item => item.traces);
-      material.trace_complete = material.ranges.length > 0 && material.reused.length === material.ranges.length && !state.pending_clues?.length;
+      const traced = new Set(material.traces.map(t => `${t.clue.session_group}:${t.clue.c4_id}:${t.clue.kind}`));
+      material.trace_complete = material.ranges.length > 0 && material.reused.length === material.ranges.length && !state.pending_clues?.length && material.clues.every(c => traced.has(`${c.session_group}:${c.c4_id}:${c.kind}`));
       if (material.trace_complete) material.trace_report = { clues: material.traces.length, deferred: 0,
         bytes: material.traces.reduce((n, trace) => n + Buffer.byteLength(JSON.stringify(trace)), 0),
         characters: material.traces.reduce((n, trace) => n + (trace.report?.characters ?? 0), 0),
@@ -58,7 +59,8 @@ function run() {
         writeJson(STATE_PATH, { ...state, active_run: material.run_id });
       }
     }
-    return { status: material.ranges.length || state.pending_clues?.length ? 'ready' : 'skip', ...material, ...pending, completed_groups: state.completed_groups || [], identity_file: config.identity_file, policy_file: path.join(DATA_DIR, 'policy.md') };
+    const { reference_snapshot, ...publicMaterial } = material;
+    return { status: material.ranges.length || state.pending_clues?.length ? 'ready' : 'skip', ...publicMaterial, ...pending, completed_groups: state.completed_groups || [], identity_file: config.identity_file, policy_file: path.join(DATA_DIR, 'policy.md') };
   }
   if (command === 'trace') {
     const material = artifact(args.run || state.active_run);
@@ -66,7 +68,8 @@ function run() {
     const result = traceMaterials(config, state, material, inputFile(args.clues));
     saveArtifact(MATERIAL_DIR, result, config.artifact_retention_days);
     writeJson(STATE_PATH, state);
-    return result;
+    const { reference_snapshot, ...publicResult } = result;
+    return publicResult;
   }
   if (command === 'commit') {
     if (!['skip', 'no_change', 'updated'].includes(args.result)) throw new Error('commit requires --result skip|no_change|updated');
@@ -91,10 +94,12 @@ function run() {
     }
     next.last_run_at = new Date().toISOString();
     next.last_result = args.result;
+    const identityWrite = identityOutcomeForRun(state, material?.run_id ?? null);
+    delete next.identity_outcome;
     writeJson(STATE_PATH, next);
     if (material) saveArtifact(MATERIAL_DIR, material, config.artifact_retention_days);
     fs.mkdirSync(path.join(DATA_DIR, 'logs'), { recursive: true });
-    fs.appendFileSync(path.join(DATA_DIR, 'logs/runs.jsonl'), JSON.stringify({ timestamp: next.last_run_at, result: args.result, report: material?.report || {}, trace_report: material?.trace_report || {}, pending_clues: next.pending_clues.length }) + '\n');
+    fs.appendFileSync(path.join(DATA_DIR, 'logs/runs.jsonl'), JSON.stringify({ timestamp: next.last_run_at, result: args.result, report: material?.report || {}, trace_report: material?.trace_report || {}, pending_clues: next.pending_clues.length, identity_write: identityWrite }) + '\n');
     return { status: 'committed', groups: next.groups, pending_clues: next.pending_clues.length };
   }
   if (command === 'ledger') {
@@ -103,7 +108,8 @@ function run() {
     if (action === 'list') return listErrors(args.type, config);
     if (action === 'clean') return cleanLedger(config);
     if (action === 'absorb') return absorbErrors(args.type, config);
-    throw new Error('Usage: reflect.js ledger append --file JSON | list [--type TYPE] | absorb --type TYPE | clean');
+    if (action === 'cover') return coverErrors({ types: listInput(args.types), sha256: args.sha256, reason: args.reason }, config);
+    throw new Error('Usage: reflect.js ledger append --file JSON | list [--type TYPE] | absorb --type TYPE | cover --types TYPES --sha256 HASH --reason REASON | clean');
   }
   if (command === 'write-identity') return writeIdentity({ file: args.file, sha256: args.sha256, types: listInput(args.types) }, config);
   if (command === 'rotation') return retryRotation(config);

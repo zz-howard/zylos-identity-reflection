@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Reuse matching thread ranges regardless of producer trace completion, tracing only missing corrections under the reflection allowance.
+- Deliver reference fragments against a baseline advanced only by successful complete material commits; omit full snapshots from CLI responses.
+- Select only this Agent's own errors, close already-covered types with an identity hash and reason, and reconcile refused writes.
+- Record explicit identity writer and rotation outcomes for every committed run.
+
 ## [0.2.0] - 2026-11-17
 
 ### Actions After Upgrading
