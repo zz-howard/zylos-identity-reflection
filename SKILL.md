@@ -78,19 +78,30 @@ The subagent owns the actual reflection work:
    `commit --result skip` after handling these pending items; advance no ranges.
 3. Read the component policy. For `reused` ranges, use only the supplied correction
    clues and traces. Do not reread their logs or inbound originals. For uncovered
-   ranges, read listed session logs, changed decision/preference files and the
+   ranges, read listed session logs, supplied `reference_changes` fragments (`changed_lines`
+   marks new or edited lines; the others are context) and the
    entire `inbound` original-message net. Select correction clues by meaning,
    without keyword rules or sender identification.
+   Read only the relevant original section if a fragment lacks necessary context;
+   do not read whole reference files. `reference_baseline_note` reports the first
+   baseline run, which deliberately supplies no reference content.
+   Judge from context whether the corrected behavior was this Agent's own.
+   Corrections of another Agent or person are excluded, including reused clues.
    Inbound collection excludes stored content starting with `[Scheduled Task:`; trace context is unchanged. Artifacts missing this filter are recollected.
 4. Save uncovered clues as a JSON array of `{session_group,c4_id,kind:"correction"}`.
    Run `reflect.js trace --run <run_id> --clues <file>`, then read its traces.
-   Trace limits apply cumulatively to this run and defer excess clues to state.
+   Include deferred reused correction clues already supplied by fetch; trace
+   handles them automatically. Deferred decisions are irrelevant. Reused traces
+   consume no local trace allowance. Local limits accumulate across this run
+   and defer excess clues to state.
    Commit reviewed ranges after selection even when clues remain deferred. The
    next run processes those clues first while collecting new checkpoint ranges.
    Do not repeat trace calls to bypass limits. `completed_groups` must not be
    processed again within the active run.
    Even if no clues were found, call trace with `[]` to record completion.
 5. Add only newly discovered errors using `reflect.js ledger append --file <file>`.
+   Only corrections of this Agent's own actions qualify. Apply this contextual
+   check to both reused and newly selected evidence; skip corrections of others.
    Each array entry contains `type,date,session_group,c4_id,quote`. Use one short
    quote, no event narrative. Group by error type, not similar-looking events.
 6. `reflect.js ledger list --type <type>` compares the new error with the ledger.
@@ -98,6 +109,12 @@ The subagent owns the actual reflection work:
    Also handle eligible `pending_error_types` retained from a deferred write.
    Never reread historical original conversations to establish repetition.
 7. For an eligible type, read the current identity in full and hash its raw bytes.
+   If the current traits already express the equivalent lesson, close the type
+   without rewriting using `reflect.js ledger cover --types '["error-type"]'
+   --sha256 <hash> --reason 'Identity already covers this behavior'`. This records
+   the reason and current identity hash on absorbed evidence. Use this only for
+   equivalent existing coverage; rewrite an existing trait when it is incomplete,
+   misleading or contradicted by the repeated evidence.
    Prepare a complete replacement file, merging existing personality traits
    before adding content. Keep all other sections byte-identical and keep identity
    within its own 16 KiB (16384-byte) limit. Do not reject a write based on
@@ -118,7 +135,8 @@ The subagent owns the actual reflection work:
    ranges actually reviewed using `reflect.js commit --run <run_id> --result
    no_change|updated --groups <comma-separated-completed-groups>`. A refused identity
    write can still commit reviewed material: the ledger retains the pending type.
-9. Report fetch and trace counts, characters and bytes, reused ranges, deferred
+9. Report fetch and trace counts, characters and bytes, reused ranges,
+   `supplemental_traces`, `collected_ranges` and each `reuse_misses` reason, deferred
    clues, identity writer mode and rotation result. See `references/materials.md`.
 
 ## Identity Write Boundary

@@ -13,7 +13,14 @@ if (process.argv.includes('--reason')) {
   const args = process.argv.slice(2);
   const file = path.join(process.env.ZYLOS_DIR, 'memory', args[args.indexOf('--path') + 1]);
   const expected = args[args.indexOf('--sha256') + 1];
+  if (process.env.FIXTURE_IDENTITY_CONFLICT === '1') fs.appendFileSync(file, '\nConcurrent edit.\n');
   const digest = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
   if (digest !== expected) { console.log(JSON.stringify({ ok: false, error: { code: 'MEMORY_CONFLICT' } })); process.exitCode = 1; }
-  else { fs.writeFileSync(file, fs.readFileSync(0)); console.log(JSON.stringify({ ok: true })); }
+  else {
+    fs.writeFileSync(file, fs.readFileSync(0));
+    if (process.env.FIXTURE_REJECT_AFTER_WRITE === '1') {
+      console.log(JSON.stringify({ ok: false, error: { code: 'REPLY_FAILED' } }));
+      process.exitCode = 1;
+    } else console.log(JSON.stringify({ ok: true }));
+  }
 }

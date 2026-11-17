@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Reuse a thinking-patterns thread only after its clue selection finished (`trace_report` present); otherwise collect it and report `clue_selection_unfinished`.
+- Keep the identity write result and covered closures together for a run, and keep the outcome across partial commits until the final commit.
+- Drop any pending identity intent whose replacement is not in place, including older intents.
+- Reference fragments mark `changed_lines` and name the section above the first change, ignoring fenced code; user git config no longer affects the diff.
+- Policy template allows closing an already-covered type with `ledger cover`.
+- Reuse matching thread ranges regardless of producer trace completion, tracing only missing corrections under the reflection allowance.
+- Deliver reference fragments against a baseline advanced only by successful complete material commits; omit full snapshots from CLI responses.
+- Select only this Agent's own errors, close already-covered types with an identity hash and reason, and reconcile refused writes.
+- Record explicit identity writer and rotation outcomes for every committed run.
+
 ## [0.2.0] - 2026-11-17
 
 ### Actions After Upgrading

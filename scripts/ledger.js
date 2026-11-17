@@ -61,6 +61,44 @@ export function absorbErrors(type) {
   store(rows);
   return { status: 'absorbed', type, absorbed };
 }
+function eligibleTypes(types, config) {
+  if (!Array.isArray(types) || !types.length || types.some(type => typeof type !== 'string' || !type.trim())) throw new Error('Identity write requires error types');
+  cleanLedger(config);
+  const eligible = new Set(listErrors(undefined, config).thresholds.filter(item => item.eligible).map(item => item.type));
+  if (types.some(type => !eligible.has(type))) throw new Error('Identity write requires the configured distinct-thread and distinct-date threshold for every type');
+}
+export function identityOutcomeForRun(state, runId) {
+  return state.identity_outcome?.run_id === (runId ?? null) ? state.identity_outcome : {
+    run_id: runId ?? null, status: 'not_written', reason: null, mode: 'none',
+    rotation: { status: 'not_requested', reason: null }, covered: null
+  };
+}
+// A run can both write some types and close others as covered: the write
+// result owns status/mode/rotation, while covered closures are kept beside it.
+function outcome(state, status, mode, reason = null, runId = state.active_run ?? null) {
+  const covered = identityOutcomeForRun(state, runId).covered ?? null;
+  state.identity_outcome = { run_id: runId, status, mode, reason, rotation: { status: 'not_requested', reason: null }, covered };
+}
+export function coverErrors({ types, reason, sha256 }, config) {
+  if (typeof reason !== 'string' || !reason.trim() || reason.length > 500 || /[\r\n]/.test(reason)) throw new Error('Already-covered closure requires a short single-line reason');
+  eligibleTypes(types, config);
+  if (hash(fs.readFileSync(config.identity_file)) !== sha256) throw new Error('Identity hash changed; read the current identity before closing covered errors');
+  const rows = entries();
+  let absorbed = 0;
+  for (const row of rows) if (types.includes(row.type) && !row.absorbed) {
+    Object.assign(row, { absorbed: true, absorption_reason: reason.trim(), identity_sha256: sha256 });
+    absorbed++;
+  }
+  store(rows);
+  const state = loadState();
+  const current = identityOutcomeForRun(state, state.active_run ?? null);
+  const covered = { types: [...new Set([...(current.covered?.types ?? []), ...types])], reason: reason.trim(), identity_sha256: sha256 };
+  if (['not_written', 'already_covered'].includes(current.status)) outcome(state, 'already_covered', 'none', reason.trim());
+  else state.identity_outcome = current;
+  state.identity_outcome.covered = covered;
+  writeJson(STATE_PATH, state);
+  return { status: 'already_covered', absorbed, types: [...new Set(types)], reason: reason.trim(), identity_sha256: sha256 };
+}
 function section(text) {
   const match = /^## Personality & Behavioral Traits[^\S\n]*\r?\n/m.exec(text);
   if (!match) throw new Error('Personality & Behavioral Traits section is missing; identity unchanged');
@@ -83,25 +121,35 @@ export function retryRotation(config) {
   rotation.ok = rotation.ok && rotation.enqueued > 0;
   if (!rotation.ok && !rotation.error) rotation.error = count ? 'No rotation controls were enqueued' : 'Rotation enqueue count is unavailable';
   state.rotation_pending = !rotation.ok;
+  state.identity_outcome = identityOutcomeForRun(state, state.active_run ?? null);
+  state.identity_outcome.rotation = { status: rotation.ok ? 'requested' : 'deferred', reason: rotation.ok ? null : rotation.error, ...rotation };
   writeJson(STATE_PATH, state);
   return { status: rotation.ok ? 'rotation_requested' : 'rotation_deferred', rotation };
 }
 export function recoverIdentityWrite(config) {
   const state = loadState(), intent = state.identity_write_pending;
-  if (!intent || intent.file !== config.identity_file || hash(fs.readFileSync(intent.file)) !== intent.sha256) return;
+  if (!intent || intent.file !== config.identity_file) return;
+  const actual = hash(fs.readFileSync(intent.file));
+  if (actual !== intent.sha256) {
+    // The intended replacement is not in place (never applied, or replaced since):
+    // drop the record. Its evidence stays unabsorbed and is reviewed again.
+    delete state.identity_write_pending;
+    writeJson(STATE_PATH, state);
+    return;
+  }
   state.identity_receipt = intent;
   state.last_identity_update_at = new Date().toISOString();
   state.rotation_pending = true;
+  outcome(state, 'written', intent.mode || 'unknown', null, intent.run_id ?? null);
+  state.identity_outcome.rotation = { status: 'deferred', reason: 'pending_rotation' };
   writeJson(STATE_PATH, state);
   for (const type of intent.types) absorbErrors(type, config);
   delete state.identity_write_pending;
   writeJson(STATE_PATH, state);
+  return { status: 'recovered' };
 }
 export function writeIdentity({ file, sha256, types }, config) {
-  if (!Array.isArray(types) || !types.length || types.some(type => typeof type !== 'string')) throw new Error('Identity write requires error types');
-  cleanLedger(config);
-  const eligible = new Set(listErrors(undefined, config).thresholds.filter(item => item.eligible).map(item => item.type));
-  if (types.some(type => !eligible.has(type))) throw new Error('Identity write requires the configured distinct-thread and distinct-date threshold for every type');
+  eligibleTypes(types, config);
   const identity = fs.readFileSync(config.identity_file), replacement = fs.readFileSync(file);
   if (hash(identity) !== sha256) throw new Error('Identity hash changed; read and merge the current identity before retrying');
   const before = section(identity.toString('utf8')), after = section(replacement.toString('utf8'));
@@ -120,15 +168,29 @@ export function writeIdentity({ file, sha256, types }, config) {
   if (replacement.length > 16384) throw Object.assign(new Error('Identity exceeds its 16 KiB budget; merge existing traits'), { memory_bytes: memoryBytes });
   // Save the expected result before the writer so a stopped run can reconcile it.
   const state = loadState();
-  state.identity_write_pending = { file: config.identity_file, sha256: hash(replacement), types: [...new Set(types)], evidence: entries().filter(row => types.includes(row.type) && !row.absorbed).map(evidenceKey) };
+  const mode = fs.existsSync(config.memory_writer) ? 'core' : 'legacy';
+  const relative = path.relative(path.join(ZYLOS_DIR, 'memory'), config.identity_file);
+  if (mode === 'core' && (relative.startsWith('..') || path.isAbsolute(relative))) throw new Error('Identity file is outside memory root');
+  state.identity_write_pending = { file: config.identity_file, sha256: hash(replacement), mode, run_id: state.active_run ?? null, types: [...new Set(types)], evidence: entries().filter(row => types.includes(row.type) && !row.absorbed).map(evidenceKey) };
   writeJson(STATE_PATH, state);
   let writer;
-  if (fs.existsSync(config.memory_writer)) {
-    const relative = path.relative(path.join(ZYLOS_DIR, 'memory'), config.identity_file);
-    if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Identity file is outside memory root');
+  if (mode === 'core') {
     writer = child(config.memory_writer, ['--path', relative, '--sha256', sha256], replacement);
+    writer.mode = mode;
     if (writer.ok) { try { if (JSON.parse(writer.output).ok !== true) writer.ok = false; } catch { writer.ok = false; } }
-    if (!writer.ok) return { status: 'write_deferred', writer, ledger_preserved: true, memory_bytes: memoryBytes };
+    if (!writer.ok) {
+      const rejected = loadState();
+      let reason = writer.error || 'writer_rejected';
+      try { const result = JSON.parse(writer.output); reason = result.error?.code || result.error?.message || reason; } catch {}
+      outcome(rejected, 'rejected', mode, reason);
+      writeJson(STATE_PATH, rejected);
+      const recovered = recoverIdentityWrite(config);
+      const actual = fs.readFileSync(config.identity_file);
+      memoryBytes.identity_after = actual.length;
+      memoryBytes.combined_after = referencesBytes === null ? null : actual.length + referencesBytes;
+      if (recovered) return { status: 'updated', recovered: true, writer, rotation: retryRotation(config), memory_bytes: memoryBytes };
+      return { status: 'write_deferred', writer, ledger_preserved: true, memory_bytes: memoryBytes };
+    }
   } else {
     const temporary = `${config.identity_file}.${process.pid}.tmp`;
     fs.writeFileSync(temporary, replacement, { mode: fs.statSync(config.identity_file).mode });

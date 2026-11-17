@@ -14,6 +14,9 @@ thinking-patterns correction clues and traces when their thread ranges match;
 read memory and inbound originals only for uncovered ranges. Select clues by
 meaning, without sender identification or keyword filters.
 
+Only corrections of this Agent's own behavior qualify, including reused clues.
+Determine whose action was corrected from context, not sender identity. Skip
+corrections of another Agent or person.
 Record only error type, date, thread, C4 id and one short quote in the ledger.
 Do not store event narratives. Compare new errors with the ledger by error type,
 not by similarity of events. Default absorption requires at least two distinct
@@ -27,8 +30,10 @@ bytes from memory_bytes in the run summary, including deferred/rejected writes.
 Combined size is informational only. Use the
 locked hash writer when available. A busy Sync or hash conflict defers writing;
 keep ledger entries unabsorbed and retry from current content next time.
-Mark a type absorbed only after a successful identity write, then request
-identity rotation and report a rejection. Clean types absent for 60 days.
+Mark a type absorbed after a successful identity write, then request identity
+rotation and report a rejection. If the current identity already expresses the
+lesson equivalently, close the type with \`ledger cover\` instead of rewriting.
+Clean types absent for 60 days.
 `;
 
 export function setup() {

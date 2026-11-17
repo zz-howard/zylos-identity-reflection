@@ -1,0 +1,12 @@
+import fs from 'node:fs';
+const data = JSON.parse(fs.readFileSync(process.env.MATERIAL_FIXTURE, 'utf8'));
+const args = process.argv.slice(2);
+const value = name => args[args.indexOf(name) + 1];
+fs.appendFileSync(process.env.MATERIAL_CALLS, JSON.stringify(args) + '\n');
+let output;
+if (args[0] === 'groups') output = { groups: data.groups.map(sessionGroup => ({ sessionGroup })) };
+else if (args.includes('--checkpoints')) output = data.checkpoints.filter(c => c.session_group === (args.includes('--group') ? value('--group') : '*') && c.id > Number(value('--after')));
+else if (args.includes('--since')) output = { rows: data.rows };
+else if (args.includes('--begin')) output = { rows: data.rows.filter(r => r.id >= Number(value('--begin')) && r.id <= Number(value('--end'))) };
+else throw new Error('Unsupported fixture invocation');
+console.log(JSON.stringify(output));
