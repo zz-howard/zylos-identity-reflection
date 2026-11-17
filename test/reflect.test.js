@@ -154,11 +154,15 @@ test('fetch reconciles an interrupted successful identity write before retrying 
   append(f, errors);
   const args = proposal(f), replacement = fs.readFileSync(args[args.indexOf('--file') + 1]);
   const evidence = errors.map(row => hash(JSON.stringify([row.type, row.date, row.session_group, row.c4_id])));
-  fs.writeFileSync(path.join(f.data, 'state.json'), JSON.stringify({ schema_version: 2, groups: {}, pending_clues: [], identity_write_pending: { file: f.identity, sha256: hash(replacement), types: ['premature-conclusion'], evidence } }));
-  // A saved intent alone must never authorize absorption or rotation.
+  const intent = JSON.stringify({ schema_version: 2, groups: {}, pending_clues: [], identity_write_pending: { file: f.identity, sha256: hash(replacement), types: ['premature-conclusion'], evidence } });
+  fs.writeFileSync(path.join(f.data, 'state.json'), intent);
+  // A saved intent alone must never authorize absorption or rotation; an
+  // unapplied intent is dropped so it cannot linger as an unfinished write.
   const before = f.invoke(['fetch']).value;
   assert.equal(before.rotation_pending, false);
   assert.ok(f.invoke(['ledger', 'list']).value.entries.every(row => !row.absorbed));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.data, 'state.json'))).identity_write_pending, undefined);
+  fs.writeFileSync(path.join(f.data, 'state.json'), intent);
   fs.writeFileSync(f.identity, replacement);
   const recovered = f.invoke(['fetch']).value;
   assert.equal(recovered.rotation_pending, true);
@@ -186,7 +190,7 @@ test('reflection reuses matching corrections without raw reads and fills uncover
   fs.mkdirSync(cachedDir, { recursive: true });
   const clue = { session_group: 'A', c4_id: 10, kind: 'correction' };
   const filters = { channels: null, exclude_channels: ['internal', 'system', 'void', 'multica'], exclude_scheduled_tasks: true };
-  fs.writeFileSync(path.join(cachedDir, 'abcdef.json'), JSON.stringify({ schema_version: 1, run_id: 'abcdef', created_at: now, trace_complete: true, filters, ranges: [{ session_group: 'A', after: 0, end: 10, checkpoint_id: 1 }], clues: [clue, { ...clue, kind: 'decision' }], traces: [{ clue, rows: [] }] }));
+  fs.writeFileSync(path.join(cachedDir, 'abcdef.json'), JSON.stringify({ schema_version: 1, run_id: 'abcdef', created_at: now, trace_complete: true, filters, ranges: [{ session_group: 'A', after: 0, end: 10, checkpoint_id: 1 }], clues: [clue, { ...clue, kind: 'decision' }], traces: [{ clue, rows: [] }], trace_report: { clues: 1, deferred: 0 } }));
   f.set({ groups: ['A'], checkpoints: [{ id: 1, session_group: 'A', start_conversation_id: 1, end_conversation_id: 10 }], rows: [] });
   const reused = f.invoke(['fetch']).value;
   assert.equal(reused.status, 'ready');
@@ -318,7 +322,7 @@ for (const group of ['A', '*']) test(`partial producer corrections reuse ${group
   const traced = clue(1), deferred = clue(2), other = { ...clue(3), kind: 'decision' };
   const dir = path.join(f.zylos, 'components/thinking-patterns/materials');
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'abcdef01.json'), JSON.stringify({ run_id: 'abcdef01', created_at: new Date().toISOString(), trace_complete: false, filters: FILTERS, ranges, clues: [traced, deferred, other], deferred_clues: [deferred, other], traces: [{ clue: traced, rows: [], report: { characters: 0 } }] }));
+  fs.writeFileSync(path.join(dir, 'abcdef01.json'), JSON.stringify({ run_id: 'abcdef01', created_at: new Date().toISOString(), trace_complete: false, filters: FILTERS, ranges, clues: [traced, deferred, other], deferred_clues: [deferred, other], traces: [{ clue: traced, rows: [], report: { characters: 0 } }], trace_report: { clues: 1, deferred: 2 } }));
   f.set({ groups: ranges.map(r => r.session_group), checkpoints: ranges.map((r, i) => ({ id: i + 1, session_group: r.session_group, end_conversation_id: r.end })), rows: [1, 2, 3].map(id => ({ id, session_group: group, timestamp: new Date().toISOString(), channel: 'telegram', direction: 'in', content: `Correction ${id}` })) });
   const fetched = f.invoke(['fetch']).value;
   assert.equal(fetched.report.reused_ranges, ranges.length);
@@ -366,9 +370,27 @@ test('only an incompatible range is recollected beside a partially traced produc
   assert.equal(fetched.inbound.length, 1);
   assert.equal(fetched.inbound[0].session_group, 'B');
 });
+test('producer artifacts reuse only after clue selection, preferring committed over closed runs', t => {
+  const f = fixture(t);
+  const ranges = [{ session_group: 'A', after: 0, end: 3, checkpoint_id: 1 }, { session_group: 'B', after: 0, end: 4, checkpoint_id: 2 }];
+  const dir = path.join(f.zylos, 'components/thinking-patterns/materials'); fs.mkdirSync(dir, { recursive: true });
+  const correction = (group, id) => ({ session_group: group, c4_id: id, kind: 'correction' });
+  const save = (id, extra) => fs.writeFileSync(path.join(dir, `${id}.json`), JSON.stringify({ schema_version: 1, run_id: id, created_at: new Date().toISOString(), filters: FILTERS, clues: [], traces: [], trace_complete: false, ...extra }));
+  // A: fetched but never traced. B: a closed run listed before the committed one.
+  save('aaaa0001', { ranges: [ranges[0]] });
+  save('bbbb0001', { ranges: [ranges[1]], closed: true, trace_report: { clues: 0, deferred: 0 } });
+  save('bbbb0002', { ranges: [ranges[1]], committed: true, clues: [correction('B', 4)], traces: [{ clue: correction('B', 4), rows: [], report: { characters: 0 } }], trace_report: { clues: 1, deferred: 0 } });
+  f.set({ groups: ['A', 'B'], checkpoints: ranges.map(r => ({ id: r.checkpoint_id, session_group: r.session_group, end_conversation_id: r.end })), rows: [{ id: 2, session_group: 'A', channel: 'telegram', direction: 'in', timestamp: new Date().toISOString(), content: 'Correction' }] });
+  const fetched = f.invoke(['fetch']).value;
+  assert.deepEqual(fetched.report.reuse_misses, [{ session_group: 'A', reason: 'clue_selection_unfinished' }]);
+  assert.equal(fetched.report.reused_ranges, 1);
+  assert.deepEqual(fetched.clues.map(c => `${c.session_group}:${c.c4_id}`), ['B:4']);
+  assert.equal(fetched.inbound.length, 1);
+  assert.equal(fetched.inbound[0].session_group, 'A');
+});
 function tpArtifact(f, ranges) {
   const dir = path.join(f.zylos, 'components/thinking-patterns/materials'); fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'abcdef01.json'), JSON.stringify({ schema_version: 1, run_id: 'abcdef01', created_at: new Date().toISOString(), trace_complete: true, filters: FILTERS, ranges, clues: [], traces: [] }));
+  fs.writeFileSync(path.join(dir, 'abcdef01.json'), JSON.stringify({ schema_version: 1, run_id: 'abcdef01', created_at: new Date().toISOString(), trace_complete: true, filters: FILTERS, ranges, clues: [], traces: [], trace_report: { clues: 0, deferred: 0 } }));
 }
 test('pending clues keep a fully reused run incomplete until traced', t => {
   const f = fixture(t);

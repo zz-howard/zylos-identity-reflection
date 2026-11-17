@@ -78,7 +78,7 @@ test('deletion-only edits emit no content and reused runs do not consume referen
   const baseline = captureReferences(s.env.ZYLOS_DIR);
   s.write('preferences.md', 'one\nthree\n');
   assert.equal(s.collect({ reference_baseline: baseline }).reference_changes.length, 0);
-  const source = s.collect({}); source.trace_complete = true;
+  const source = traceMaterials(s.config, {}, s.collect({}), []);
   const reused = collectMaterials(s.config, { reference_baseline: baseline }, { zylos_dir: s.env.ZYLOS_DIR, reuse_artifacts: [source] });
   assert.equal(reused.reference_snapshot, undefined);
   assert.equal(reused.reference_changes.length, 0);
@@ -129,4 +129,20 @@ test('global checkpoints and independent baselines preserve separate reference p
   assert.match(next.reference_changes[0].content, /second/);
   assert.equal(s.collect({}).reference_changes.length, 0);
   assert.equal(state.reference_baseline['memory/reference/preferences.md'], 'first\n');
+});
+
+test('fragments name the section above the change, ignore fenced comments and mark changed lines', t => {
+  const s = setup(t);
+  const body = ['# Prefs', '', '## Alpha', 'a1', 'a2', '', '## Beta', 'b1', '```bash', '# install deps', 'run it', '```', 'b2', 'b3', ''];
+  s.write('preferences.md', body.join('\n'));
+  const baseline = captureReferences(s.env.ZYLOS_DIR);
+  const next = [...body]; next.splice(7, 0, 'beta first'); next[13] = 'b2 changed';
+  s.write('preferences.md', next.join('\n'));
+  const changes = referenceChanges(s.env.ZYLOS_DIR, baseline, captureReferences(s.env.ZYLOS_DIR));
+  assert.equal(changes.length, 2);
+  assert.equal(changes[0].section, '## Beta');
+  assert.deepEqual(changes[0].changed_lines, [8]);
+  assert.equal(changes[1].section, '## Beta');
+  assert.deepEqual(changes[1].changed_lines, [14]);
+  for (const change of changes) for (const line of change.changed_lines) assert.equal(change.content.split('\n')[line - change.start_line], next[line - 1]);
 });

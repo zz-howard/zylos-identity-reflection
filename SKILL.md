@@ -78,7 +78,8 @@ The subagent owns the actual reflection work:
    `commit --result skip` after handling these pending items; advance no ranges.
 3. Read the component policy. For `reused` ranges, use only the supplied correction
    clues and traces. Do not reread their logs or inbound originals. For uncovered
-   ranges, read listed session logs, supplied `reference_changes` fragments and the
+   ranges, read listed session logs, supplied `reference_changes` fragments (`changed_lines`
+   marks new or edited lines; the others are context) and the
    entire `inbound` original-message net. Select correction clues by meaning,
    without keyword rules or sender identification.
    Read only the relevant original section if a fragment lacks necessary context;

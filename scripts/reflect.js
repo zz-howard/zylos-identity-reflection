@@ -95,7 +95,8 @@ function run() {
     next.last_run_at = new Date().toISOString();
     next.last_result = args.result;
     const identityWrite = identityOutcomeForRun(state, material?.run_id ?? null);
-    delete next.identity_outcome;
+    // Keep the outcome until the run finishes so a later partial commit still reports it.
+    if (!next.active_run) delete next.identity_outcome;
     writeJson(STATE_PATH, next);
     if (material) saveArtifact(MATERIAL_DIR, material, config.artifact_retention_days);
     fs.mkdirSync(path.join(DATA_DIR, 'logs'), { recursive: true });

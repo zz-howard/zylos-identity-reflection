@@ -99,8 +99,13 @@ export function collectMaterials(config, state = {}, options = {}) {
     if (!Number.isSafeInteger(end)) throw new Error('C4 checkpoint end missing');
     if (end <= after) continue;
     const range = { session_group: group, after, end, checkpoint_id: latest.id };
-    // Completeness belongs to each clue, not the producer's entire run.
-    const cached = (options.reuse_artifacts ?? []).find(a => JSON.stringify(a.filters) === JSON.stringify(filters) && a.ranges?.some(r => r.session_group === group && r.after === after && r.end === end));
+    // Completeness belongs to each clue, not the producer's entire run, but the
+    // producer must have finished clue selection (trace records it, even for []).
+    const sameRange = (options.reuse_artifacts ?? []).filter(a => a.ranges?.some(r => r.session_group === group && r.after === after && r.end === end));
+    const sameFilters = sameRange.filter(a => JSON.stringify(a.filters) === JSON.stringify(filters));
+    const selected = sameFilters.filter(a => a.trace_report && !a.closed)
+      .sort((a, b) => Number(Boolean(b.committed)) - Number(Boolean(a.committed)) || String(b.created_at).localeCompare(String(a.created_at)));
+    const cached = selected[0];
     if (cached) {
       const source = cached.ranges.find(r => r.session_group === group && r.after === after && r.end === end);
       const within = c => c.session_group === group && c.kind === 'correction' && c.c4_id > after && c.c4_id <= end;
@@ -110,10 +115,7 @@ export function collectMaterials(config, state = {}, options = {}) {
       reused.push({ range, clues, traces });
       continue;
     }
-    if (options.reuse_artifacts) {
-      const candidates = options.reuse_artifacts.filter(a => a.ranges?.some(r => r.session_group === group && r.after === after && r.end === end));
-      reuseMisses.push({ session_group: group, reason: !candidates.length ? 'range_mismatch' : 'filters_mismatch' });
-    }
+    if (options.reuse_artifacts) reuseMisses.push({ session_group: group, reason: !sameRange.length ? 'range_mismatch' : !sameFilters.length ? 'filters_mismatch' : 'clue_selection_unfinished' });
     let rows;
     if (previous.end_conversation_id === undefined) {
       // Bootstrap uses the CLI time query to avoid reading historical backlog.

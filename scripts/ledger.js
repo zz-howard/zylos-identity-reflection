@@ -70,11 +70,14 @@ function eligibleTypes(types, config) {
 export function identityOutcomeForRun(state, runId) {
   return state.identity_outcome?.run_id === (runId ?? null) ? state.identity_outcome : {
     run_id: runId ?? null, status: 'not_written', reason: null, mode: 'none',
-    rotation: { status: 'not_requested', reason: null }
+    rotation: { status: 'not_requested', reason: null }, covered: null
   };
 }
+// A run can both write some types and close others as covered: the write
+// result owns status/mode/rotation, while covered closures are kept beside it.
 function outcome(state, status, mode, reason = null, runId = state.active_run ?? null) {
-  state.identity_outcome = { run_id: runId, status, mode, reason, rotation: { status: 'not_requested', reason: null } };
+  const covered = identityOutcomeForRun(state, runId).covered ?? null;
+  state.identity_outcome = { run_id: runId, status, mode, reason, rotation: { status: 'not_requested', reason: null }, covered };
 }
 export function coverErrors({ types, reason, sha256 }, config) {
   if (typeof reason !== 'string' || !reason.trim() || reason.length > 500 || /[\r\n]/.test(reason)) throw new Error('Already-covered closure requires a short single-line reason');
@@ -88,7 +91,11 @@ export function coverErrors({ types, reason, sha256 }, config) {
   }
   store(rows);
   const state = loadState();
-  outcome(state, 'already_covered', 'none', reason.trim());
+  const current = identityOutcomeForRun(state, state.active_run ?? null);
+  const covered = { types: [...new Set([...(current.covered?.types ?? []), ...types])], reason: reason.trim(), identity_sha256: sha256 };
+  if (['not_written', 'already_covered'].includes(current.status)) outcome(state, 'already_covered', 'none', reason.trim());
+  else state.identity_outcome = current;
+  state.identity_outcome.covered = covered;
   writeJson(STATE_PATH, state);
   return { status: 'already_covered', absorbed, types: [...new Set(types)], reason: reason.trim(), identity_sha256: sha256 };
 }
@@ -124,10 +131,10 @@ export function recoverIdentityWrite(config) {
   if (!intent || intent.file !== config.identity_file) return;
   const actual = hash(fs.readFileSync(intent.file));
   if (actual !== intent.sha256) {
-    if (actual === intent.before_sha256) {
-      delete state.identity_write_pending;
-      writeJson(STATE_PATH, state);
-    }
+    // The intended replacement is not in place (never applied, or replaced since):
+    // drop the record. Its evidence stays unabsorbed and is reviewed again.
+    delete state.identity_write_pending;
+    writeJson(STATE_PATH, state);
     return;
   }
   state.identity_receipt = intent;
@@ -164,7 +171,7 @@ export function writeIdentity({ file, sha256, types }, config) {
   const mode = fs.existsSync(config.memory_writer) ? 'core' : 'legacy';
   const relative = path.relative(path.join(ZYLOS_DIR, 'memory'), config.identity_file);
   if (mode === 'core' && (relative.startsWith('..') || path.isAbsolute(relative))) throw new Error('Identity file is outside memory root');
-  state.identity_write_pending = { file: config.identity_file, sha256: hash(replacement), before_sha256: sha256, mode, run_id: state.active_run ?? null, types: [...new Set(types)], evidence: entries().filter(row => types.includes(row.type) && !row.absorbed).map(evidenceKey) };
+  state.identity_write_pending = { file: config.identity_file, sha256: hash(replacement), mode, run_id: state.active_run ?? null, types: [...new Set(types)], evidence: entries().filter(row => types.includes(row.type) && !row.absorbed).map(evidenceKey) };
   writeJson(STATE_PATH, state);
   let writer;
   if (mode === 'core') {
@@ -182,13 +189,6 @@ export function writeIdentity({ file, sha256, types }, config) {
       memoryBytes.identity_after = actual.length;
       memoryBytes.combined_after = referencesBytes === null ? null : actual.length + referencesBytes;
       if (recovered) return { status: 'updated', recovered: true, writer, rotation: retryRotation(config), memory_bytes: memoryBytes };
-      // A rejected writer has stopped; a concurrent replacement cannot fulfill
-      // this intent and must be reviewed again without absorbing its evidence.
-      const unapplied = loadState();
-      if (unapplied.identity_write_pending?.sha256 === hash(replacement)) {
-        delete unapplied.identity_write_pending;
-        writeJson(STATE_PATH, unapplied);
-      }
       return { status: 'write_deferred', writer, ledger_preserved: true, memory_bytes: memoryBytes };
     }
   } else {

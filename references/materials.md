@@ -7,7 +7,8 @@ The shared schema is the same as thinking-patterns: `schema_version: 1`,
 `trace_report`. A range is `{session_group,after,end,checkpoint_id}` with optional
 time boundaries. Clues are `{session_group,c4_id,kind,source_range}`. Traces hold the clue,
 same-thread rows and volume report. `reference_changes` supplies current changed
-text with nearby context. Read only a relevant original section if needed.
+text with nearby context; `changed_lines` marks new or edited lines and `section`
+is the nearest heading above the first change outside fenced code. Read only a relevant original section if needed.
 The private artifact's `reference_snapshot` is omitted from CLI output. A
 component-local `reference_baseline` advances atomically with a fully successful
 material commit; partial, skipped and failed runs retain the prior baseline.
@@ -18,13 +19,17 @@ Core-projected text is never reprojected.
 
 The reflection consumer reads thinking-patterns' `materials/` artifacts. It
 reuses corrections and their traces only when range and channel filters match
-exactly, regardless of the producer's overall trace completeness. Deferred
+exactly and the producer finished clue selection (its artifact has `trace_report`,
+which trace records even for an empty clue list) and was not closed by a skip,
+regardless of the producer's overall trace completeness. Committed producer runs
+are preferred, then the newest. Deferred
 correction clues are traced locally under a separate cumulative allowance;
 deferred decisions are ignored. It collects only uncovered ranges itself.
 Inbound collection rejects only stored content starting with `[Scheduled Task:` before wrapper extraction; the marker elsewhere is retained and trace context is unchanged. `filters.exclude_scheduled_tasks: true` records this contract. Older artifacts without that field fail filter matching and are recollected.
 `report.reused_ranges` and zero inbound/session sizes prove successful reuse.
 `report.reuse_misses` lists each uncovered thread with `range_mismatch`,
-or `filters_mismatch`. `collected_ranges` counts fully collected threads and
+`filters_mismatch`, or `clue_selection_unfinished` (matching producer runs had
+not selected clues yet, or were skipped). `collected_ranges` counts fully collected threads and
 `supplemental_traces` counts locally traced reused correction clues.
 Both components retain completed artifacts for seven days by default; incomplete
 artifacts and state-held pending clues are retained for continuation.
@@ -76,7 +81,13 @@ Expiry cleanup runs before eligibility checks and on quiet fetches too.
 current identity, recording `absorption_reason` and `identity_sha256` without
 writing identity or requesting rotation. Contextual attribution to this Agent
 is required before adding any error, regardless of its source.
-Writer rejection clears an unchanged pre-write intent; an already-applied
-replacement is recovered and absorbed before rotation is requested.
+A pending intent whose replacement is not in place (never applied or replaced
+since) is dropped on fetch or writer rejection; its evidence stays unabsorbed for
+review. An already-applied replacement is recovered and absorbed before rotation
+is requested.
 Each run log includes `identity_write` with explicit status, mode, reason and
-rotation status/reason, including `not_written`/`none`/`not_requested` defaults.
+rotation status/reason, including `not_written`/`none`/`not_requested` defaults,
+and `covered` (`null` or the types closed by `ledger cover` with reason and
+identity hash). A run that both writes and covers keeps the write's status, mode
+and rotation. The outcome stays until the run's final commit, so partial commits
+log it too.

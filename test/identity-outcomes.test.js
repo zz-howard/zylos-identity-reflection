@@ -179,3 +179,29 @@ test('write outcomes retain deferred rotation reason and stay scoped to their ru
   assert.equal(other.mode, 'none');
   assert.equal(other.rotation.status, 'not_requested');
 });
+
+test('a run that writes one type and closes another as covered logs both, across partial commits', t => {
+  const f = fixture(t); f.seed();
+  const covered = f.evidence.map(row => ({ ...row, type: 'thread-drift', c4_id: row.c4_id + 10 }));
+  f.run(`ledger.appendErrors(${JSON.stringify(covered)},config);`);
+  const runId = 'abcdef0123';
+  const ranges = [{ session_group: 'A', after: 0, end: 5, checkpoint_id: 1 }, { session_group: 'B', after: 0, end: 6, checkpoint_id: 2 }];
+  const materials = path.join(f.env.ZYLOS_DATA_DIR, 'materials'); fs.mkdirSync(materials);
+  fs.writeFileSync(path.join(materials, `${runId}.json`), JSON.stringify({ schema_version: 1, run_id: runId, created_at: new Date().toISOString(), ranges, reused: [], clues: [], traces: [], trace_complete: true, trace_report: { clues: 0, deferred: 0 }, report: {} }));
+  f.setState({ groups: {}, pending_clues: [], active_run: runId });
+  assert.equal(f.write().status, 'updated');
+  f.cli(['ledger', 'cover', '--types', '["thread-drift"]', '--sha256', digest(f.replacement), '--reason', 'Identity already covers thread drift']);
+  f.cli(['commit', '--result', 'updated', '--groups', 'A']);
+  f.cli(['commit', '--result', 'updated', '--groups', 'B']);
+  const logs = fs.readFileSync(path.join(f.env.ZYLOS_DATA_DIR, 'logs/runs.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(logs.length, 2);
+  for (const { identity_write: outcome } of logs) {
+    assert.equal(outcome.run_id, runId);
+    assert.equal(outcome.status, 'written');
+    assert.equal(outcome.mode, 'core');
+    assert.equal(outcome.rotation.status, 'requested');
+    assert.deepEqual(outcome.covered.types, ['thread-drift']);
+  }
+  assert.equal(f.state().identity_outcome, undefined);
+  assert.ok(f.rows().every(row => row.absorbed));
+});
