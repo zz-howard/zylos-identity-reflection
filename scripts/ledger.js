@@ -41,7 +41,7 @@ export function listErrors(type, config) {
     const active = rows.filter(row => row.type === value && !row.absorbed);
     const groups = new Set(active.map(row => row.session_group)).size;
     const dates = new Set(active.map(row => row.date)).size;
-    return { type: value, groups, dates, eligible: groups >= config.ledger_min_groups && dates >= config.ledger_min_dates };
+    return { type: value, groups, dates, eligible: dates >= config.ledger_min_dates };
   });
   return { entries: rows, thresholds };
 }
@@ -65,7 +65,7 @@ function eligibleTypes(types, config) {
   if (!Array.isArray(types) || !types.length || types.some(type => typeof type !== 'string' || !type.trim())) throw new Error('Identity write requires error types');
   cleanLedger(config);
   const eligible = new Set(listErrors(undefined, config).thresholds.filter(item => item.eligible).map(item => item.type));
-  if (types.some(type => !eligible.has(type))) throw new Error('Identity write requires the configured distinct-thread and distinct-date threshold for every type');
+  if (types.some(type => !eligible.has(type))) throw new Error('Identity write requires the configured distinct-date threshold for every type');
 }
 export function identityOutcomeForRun(state, runId) {
   return state.identity_outcome?.run_id === (runId ?? null) ? state.identity_outcome : {

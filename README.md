@@ -14,8 +14,8 @@ The background agent reads memory and channel-filtered inbound originals, select
 correction clues, and fetches bounded same-thread context. Completed, exactly
 matching thinking-patterns material is reused before reading logs or originals.
 Inbound collection excludes stored content starting with `[Scheduled Task:`; the marker elsewhere is retained and trace context is unchanged. Artifacts missing this filter are recollected.
-Only errors are recorded in the compact ledger. An error type must appear in at
-least two distinct threads and two distinct dates before it may change
+Only errors are recorded in the compact ledger. An error type must appear on at
+least two distinct dates (in any threads) before it may change
 `Personality & Behavioral Traits`; all other identity sections remain unchanged.
 
 Installation and upgrade register one nightly `30 0 * * *` task. Stale managed
@@ -35,7 +35,6 @@ Data lives in `~/zylos/components/identity-reflection`. Defaults include:
   "trace_context": 8,
   "trace_max_bytes": 262144,
   "artifact_retention_days": 7,
-  "ledger_min_groups": 2,
   "ledger_min_dates": 2,
   "ledger_expiry_days": 60
 }

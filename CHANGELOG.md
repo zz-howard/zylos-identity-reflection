@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Ledger eligibility counts only distinct dates (default 2); the distinct-thread requirement is removed, so single-session instances can reach it. `ledger_min_groups` is dropped from config on load.
+
 ### Fixed
 - Reuse a thinking-patterns thread only after its clue selection finished (`trace_report` present); otherwise collect it and report `clue_selection_unfinished`.
 - Keep the identity write result and covered closures together for a run, and keep the outcome across partial commits until the final commit.

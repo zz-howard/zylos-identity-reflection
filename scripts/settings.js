@@ -16,7 +16,6 @@ export const DEFAULT_CONFIG = {
   trace_context: 8,
   trace_max_bytes: 262144,
   artifact_retention_days: 7,
-  ledger_min_groups: 2,
   ledger_min_dates: 2,
   ledger_expiry_days: 60,
   memory_writer: path.join(ZYLOS_DIR, '.claude/skills/zylos-memory/scripts/memory-write.js'),
@@ -42,8 +41,8 @@ export function loadConfig() {
   const old = readJson(path.join(DATA_DIR, 'config.json'), {});
   const result = { ...DEFAULT_CONFIG, ...old };
   if (old.c4_fetch_script && !old.c4_fetch_cli) result.c4_fetch_cli = old.c4_fetch_script;
-  for (const key of ['c4_db', 'c4_fetch_script', 'min_conversations', 'max_conversations']) delete result[key];
+  for (const key of ['c4_db', 'c4_fetch_script', 'min_conversations', 'max_conversations', 'ledger_min_groups']) delete result[key];
   for (const key of ['identity_file', 'c4_db_cli', 'c4_fetch_cli', 'thinking_patterns_data_dir', 'memory_writer', 'rotation_script']) result[key] = expandHome(result[key]);
-  for (const key of ['ledger_min_groups', 'ledger_min_dates', 'ledger_expiry_days']) if (!Number.isInteger(result[key]) || result[key] < 1) throw new Error(`Invalid ${key}`);
+  for (const key of ['ledger_min_dates', 'ledger_expiry_days']) if (!Number.isInteger(result[key]) || result[key] < 1) throw new Error(`Invalid ${key}`);
   return result;
 }
