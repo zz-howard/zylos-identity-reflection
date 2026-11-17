@@ -402,6 +402,7 @@ test('a checkpoint after the producer run reuses its prefix and collects only th
   save('dddd0004', [{ session_group: 'A', after: 0, end: 5, checkpoint_id: 3 }], { filters: { ...FILTERS, exclude_scheduled_tasks: undefined } });
   const now = new Date().toISOString();
   f.set({ groups: ['A'], checkpoints: [{ id: 4, session_group: 'A', end_conversation_id: 6 }], rows: [1, 2, 3, 4, 5, 6].map(id => ({ id, session_group: 'A', channel: 'telegram', direction: 'in', timestamp: now, content: `Message ${id}` })) });
+  fs.writeFileSync(path.join(f.data, 'state.json'), JSON.stringify({ schema_version: 2, groups: { A: { end_conversation_id: 0, checkpoint_id: 0 } }, pending_clues: [] }));
   const fetched = f.invoke(['fetch']).value;
   assert.equal(fetched.status, 'ready');
   assert.equal(fetched.report.reused_ranges, 0);
@@ -430,12 +431,24 @@ test('a fully traced prefix still needs tail clue selection before commit', t =>
   const f = fixture(t);
   tpArtifact(f, [{ session_group: 'A', after: 0, end: 4, checkpoint_id: 1 }]);
   f.set({ groups: ['A'], checkpoints: [{ id: 2, session_group: 'A', end_conversation_id: 6 }], rows: [5, 6].map(id => ({ id, session_group: 'A', channel: 'telegram', direction: 'in', timestamp: new Date().toISOString(), content: `Message ${id}` })) });
+  fs.writeFileSync(path.join(f.data, 'state.json'), JSON.stringify({ schema_version: 2, groups: { A: { end_conversation_id: 0, checkpoint_id: 0 } }, pending_clues: [] }));
   const fetched = f.invoke(['fetch']).value;
   assert.equal(fetched.report.partially_reused_ranges, 1);
   assert.equal(fetched.clues.length, 0);
   assert.equal(fetched.trace_complete, false);
   assert.equal(fetched.trace_report, undefined);
   assert.equal(f.invoke(['commit', '--run', fetched.run_id, '--result', 'no_change']).code, 1);
+});
+test('a first run keeps the bootstrap window instead of reusing an old prefix', t => {
+  const f = fixture(t);
+  tpArtifact(f, [{ session_group: 'A', after: 0, end: 2, checkpoint_id: 1 }]);
+  const old = new Date(Date.now() - 5 * 86400000).toISOString(), now = new Date().toISOString();
+  f.set({ groups: ['A'], checkpoints: [{ id: 2, session_group: 'A', end_conversation_id: 5 }], rows: [3, 4, 5].map(id => ({ id, session_group: 'A', channel: 'telegram', direction: 'in', timestamp: id < 5 ? old : now, content: `Message ${id}` })) });
+  const fetched = f.invoke(['fetch']).value;
+  assert.equal(fetched.report.partially_reused_ranges, 0);
+  assert.equal(fetched.report.reuse_misses[0].reason, 'range_mismatch');
+  assert.deepEqual(fetched.inbound.map(row => row.id), [5]);
+  assert.ok(fetched.ranges[0].bootstrap_since);
 });
 test('producer artifacts reuse only after clue selection and only this range\'s corrections', t => {
   const f = fixture(t);
