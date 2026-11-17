@@ -1,6 +1,6 @@
 ---
 name: identity-reflection
-version: 0.2.0
+version: 0.3.0
 description: Reflect nightly on new errors from checkpoint-covered memory and C4 context, reuse thinking-patterns correction evidence, and absorb repeated error types into stable personality traits.
 type: utility
 
