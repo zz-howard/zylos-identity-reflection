@@ -49,7 +49,7 @@ function run() {
       material.clues = material.reused.flatMap(item => item.clues);
       material.traces = material.reused.flatMap(item => item.traces);
       const traced = new Set(material.traces.map(t => `${t.clue.session_group}:${t.clue.c4_id}:${t.clue.kind}`));
-      material.trace_complete = material.ranges.length > 0 && material.reused.length === material.ranges.length && !state.pending_clues?.length && material.clues.every(c => traced.has(`${c.session_group}:${c.c4_id}:${c.kind}`));
+      material.trace_complete = material.ranges.length > 0 && material.reused.length === material.ranges.length && material.reused.every(item => !item.partial) && !state.pending_clues?.length && material.clues.every(c => traced.has(`${c.session_group}:${c.c4_id}:${c.kind}`));
       if (material.trace_complete) material.trace_report = { clues: material.traces.length, deferred: 0,
         bytes: material.traces.reduce((n, trace) => n + Buffer.byteLength(JSON.stringify(trace)), 0),
         characters: material.traces.reduce((n, trace) => n + (trace.report?.characters ?? 0), 0),

@@ -375,17 +375,67 @@ test('deferred decisions alone do not block correction reuse', t => {
 });
 test('only an incompatible range is recollected beside a partially traced producer', t => {
   const f = fixture(t);
-  tpArtifact(f, [{ session_group: 'A', after: 0, end: 3, checkpoint_id: 1 }, { session_group: 'B', after: 0, end: 4, checkpoint_id: 2 }]);
+  tpArtifact(f, [{ session_group: 'A', after: 0, end: 3, checkpoint_id: 1 }, { session_group: 'B', after: 2, end: 4, checkpoint_id: 2 }]);
   const file = path.join(f.zylos, 'components/thinking-patterns/materials/abcdef01.json');
   const material = JSON.parse(fs.readFileSync(file)); material.trace_complete = false; fs.writeFileSync(file, JSON.stringify(material));
   f.set({ groups: ['A', 'B'], checkpoints: [{ id: 1, session_group: 'A', end_conversation_id: 3 }, { id: 2, session_group: 'B', end_conversation_id: 5 }], rows: [{ id: 5, session_group: 'B', channel: 'telegram', direction: 'in', timestamp: new Date().toISOString(), content: 'Correction' }] });
   const fetched = f.invoke(['fetch']).value;
   assert.equal(fetched.report.reused_ranges, 1);
+  assert.equal(fetched.report.partially_reused_ranges, 0);
   assert.equal(fetched.report.reuse_misses.length, 1);
   assert.equal(fetched.report.reuse_misses[0].session_group, 'B');
   assert.equal(fetched.report.reuse_misses[0].reason, 'range_mismatch');
   assert.equal(fetched.inbound.length, 1);
   assert.equal(fetched.inbound[0].session_group, 'B');
+});
+// Private fixture CLI integration: run for prefix reuse, trace accounting or
+// commit-gating changes; skip unrelated ledger wording and scheduling.
+test('a checkpoint after the producer run reuses its prefix and collects only the newer tail', t => {
+  const f = fixture(t, { trace_context: 1 });
+  const clue = (id, kind = 'correction') => ({ session_group: 'A', c4_id: id, kind });
+  const dir = path.join(f.zylos, 'components/thinking-patterns/materials'); fs.mkdirSync(dir, { recursive: true });
+  const save = (id, ranges, extra = {}) => fs.writeFileSync(path.join(dir, `${id}.json`), JSON.stringify({ schema_version: 1, run_id: id, created_at: new Date().toISOString(), trace_complete: true, filters: FILTERS, ranges, clues: [], traces: [], trace_report: { clues: 0, deferred: 0 }, ...extra }));
+  // Shorter prefix, a longer one with a traced and a deferred correction, an unfinished one, and a mismatched filter.
+  save('aaaa0001', [{ session_group: 'A', after: 0, end: 2, checkpoint_id: 1 }]);
+  save('bbbb0002', [{ session_group: 'A', after: 0, end: 4, checkpoint_id: 2 }], { trace_complete: false, clues: [clue(1), clue(3), clue(4, 'decision')], deferred_clues: [clue(3), clue(4, 'decision')], traces: [{ clue: clue(1), rows: [{ id: 1 }], report: { characters: 1 } }], trace_report: { clues: 1, deferred: 2 } });
+  save('cccc0003', [{ session_group: 'A', after: 0, end: 5, checkpoint_id: 3 }], { trace_report: undefined });
+  save('dddd0004', [{ session_group: 'A', after: 0, end: 5, checkpoint_id: 3 }], { filters: { ...FILTERS, exclude_scheduled_tasks: undefined } });
+  const now = new Date().toISOString();
+  f.set({ groups: ['A'], checkpoints: [{ id: 4, session_group: 'A', end_conversation_id: 6 }], rows: [1, 2, 3, 4, 5, 6].map(id => ({ id, session_group: 'A', channel: 'telegram', direction: 'in', timestamp: now, content: `Message ${id}` })) });
+  const fetched = f.invoke(['fetch']).value;
+  assert.equal(fetched.status, 'ready');
+  assert.equal(fetched.report.reused_ranges, 0);
+  assert.equal(fetched.report.partially_reused_ranges, 1);
+  assert.equal(fetched.report.collected_ranges, 0);
+  assert.deepEqual(fetched.report.reuse_misses, []);
+  assert.deepEqual(fetched.ranges.map(r => [r.after, r.end, r.reused_through]), [[0, 6, 4]]);
+  assert.deepEqual(fetched.inbound.map(row => row.id), [5, 6]);
+  assert.deepEqual(fetched.clues.map(c => `${c.c4_id}:${c.kind}`).sort(), ['1:correction', '3:correction']);
+  assert.equal(fetched.traces.length, 1);
+  assert.equal(fetched.trace_complete, false);
+  // The collected tail still takes a reference snapshot (first run: baseline only).
+  assert.match(fetched.reference_baseline_note ?? '', /baseline/);
+  const begins = fs.readFileSync(f.calls, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(args => args.includes('--begin'));
+  assert.deepEqual(begins.map(args => [args[args.indexOf('--begin') + 1], args[args.indexOf('--end') + 1]]), [['5', '6']]);
+  assert.doesNotMatch(fs.readFileSync(f.calls, 'utf8'), /--since/);
+  assert.equal(f.invoke(['commit', '--run', fetched.run_id, '--result', 'no_change']).code, 1);
+  const traced = f.invoke(['trace', '--clues', f.json('tail.json', [clue(1), clue(6)])]).value;
+  assert.deepEqual(traced.traces.map(tr => tr.clue.c4_id).sort(), [1, 3, 6]);
+  assert.equal(traced.report.supplemental_traces, 1);
+  assert.equal(traced.trace_complete, true);
+  assert.equal(f.invoke(['commit', '--result', 'no_change']).code, 0);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.data, 'state.json'))).groups.A.end_conversation_id, 6);
+});
+test('a fully traced prefix still needs tail clue selection before commit', t => {
+  const f = fixture(t);
+  tpArtifact(f, [{ session_group: 'A', after: 0, end: 4, checkpoint_id: 1 }]);
+  f.set({ groups: ['A'], checkpoints: [{ id: 2, session_group: 'A', end_conversation_id: 6 }], rows: [5, 6].map(id => ({ id, session_group: 'A', channel: 'telegram', direction: 'in', timestamp: new Date().toISOString(), content: `Message ${id}` })) });
+  const fetched = f.invoke(['fetch']).value;
+  assert.equal(fetched.report.partially_reused_ranges, 1);
+  assert.equal(fetched.clues.length, 0);
+  assert.equal(fetched.trace_complete, false);
+  assert.equal(fetched.trace_report, undefined);
+  assert.equal(f.invoke(['commit', '--run', fetched.run_id, '--result', 'no_change']).code, 1);
 });
 test('producer artifacts reuse only after clue selection and only this range\'s corrections', t => {
   const f = fixture(t);

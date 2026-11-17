@@ -77,8 +77,10 @@ The subagent owns the actual reflection work:
    transcripts. If `status` is `skip`, skip steps 3-6 and record this run with
    `commit --result skip` after handling these pending items; advance no ranges.
 3. Read the component policy. For `reused` ranges, use only the supplied correction
-   clues and traces. Do not reread their logs or inbound originals. For uncovered
-   ranges, read listed session logs, supplied `reference_changes` fragments (`changed_lines`
+   clues and traces. Do not reread their logs or inbound originals. A range with
+   `reused_through` reused corrections up to that C4 id; its `inbound` holds only
+   later messages, so select new clues only above that id. For uncovered
+   ranges and those tails, read listed session logs, supplied `reference_changes` fragments (`changed_lines`
    marks new or edited lines; the others are context) and the
    entire `inbound` original-message net. Select correction clues by meaning,
    without keyword rules or sender identification.
@@ -136,6 +138,7 @@ The subagent owns the actual reflection work:
    no_change|updated --groups <comma-separated-completed-groups>`. A refused identity
    write can still commit reviewed material: the ledger retains the pending type.
 9. Report fetch and trace counts, characters and bytes, reused ranges,
+   `partially_reused_ranges`,
    `supplemental_traces`, `collected_ranges` and each `reuse_misses` reason, deferred
    clues, identity writer mode and rotation result. See `references/materials.md`.
 
