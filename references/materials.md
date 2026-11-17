@@ -20,16 +20,15 @@ Core-projected text is never reprojected.
 The reflection consumer reads thinking-patterns' `materials/` artifacts. It
 reuses corrections and their traces only when range and channel filters match
 exactly and the producer finished clue selection (its artifact has `trace_report`,
-which trace records even for an empty clue list) and was not closed by a skip,
-regardless of the producer's overall trace completeness. Committed producer runs
-are preferred, then the newest. Deferred
+which trace records even for an empty clue list), regardless of the producer's
+overall trace completeness. Deferred
 correction clues are traced locally under a separate cumulative allowance;
 deferred decisions are ignored. It collects only uncovered ranges itself.
 Inbound collection rejects only stored content starting with `[Scheduled Task:` before wrapper extraction; the marker elsewhere is retained and trace context is unchanged. `filters.exclude_scheduled_tasks: true` records this contract. Older artifacts without that field fail filter matching and are recollected.
 `report.reused_ranges` and zero inbound/session sizes prove successful reuse.
 `report.reuse_misses` lists each uncovered thread with `range_mismatch`,
 `filters_mismatch`, or `clue_selection_unfinished` (matching producer runs had
-not selected clues yet, or were skipped). `collected_ranges` counts fully collected threads and
+not selected clues yet). `collected_ranges` counts fully collected threads and
 `supplemental_traces` counts locally traced reused correction clues.
 Both components retain completed artifacts for seven days by default; incomplete
 artifacts and state-held pending clues are retained for continuation.

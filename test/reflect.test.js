@@ -340,6 +340,20 @@ for (const group of ['A', '*']) test(`partial producer corrections reuse ${group
   assert.equal(result.value.traces.at(-1).clue.c4_id, 2);
   assert.equal(f.invoke(['commit', '--result', 'no_change']).code, 0);
 });
+test('reused trace bytes do not consume the reflection byte allowance', t => {
+  const f = fixture(t, { trace_max_clues: 5, trace_context: 1, trace_max_bytes: 2000 });
+  const ranges = [{ session_group: 'A', after: 0, end: 3, checkpoint_id: 1 }];
+  const clue = id => ({ session_group: 'A', c4_id: id, kind: 'correction' });
+  const dir = path.join(f.zylos, 'components/thinking-patterns/materials');
+  fs.mkdirSync(dir, { recursive: true });
+  const large = { clue: clue(1), rows: [{ id: 1, content: 'x'.repeat(5000) }], report: { characters: 5000 } };
+  fs.writeFileSync(path.join(dir, 'abcdef01.json'), JSON.stringify({ run_id: 'abcdef01', created_at: new Date().toISOString(), trace_complete: false, filters: FILTERS, ranges, clues: [clue(1), clue(2), clue(3)], deferred_clues: [clue(2), clue(3)], traces: [large], trace_report: { clues: 1, deferred: 2 } }));
+  f.set({ groups: ['A'], checkpoints: [{ id: 1, session_group: 'A', end_conversation_id: 3 }], rows: [1, 2, 3].map(id => ({ id, session_group: 'A', timestamp: new Date().toISOString(), channel: 'telegram', direction: 'in', content: `Correction ${id}` })) });
+  assert.equal(f.invoke(['fetch']).value.report.reused_ranges, 1);
+  const result = f.invoke(['trace', '--clues', f.json('empty.json', [])]).value;
+  assert.equal(result.report.supplemental_traces, 2);
+  assert.equal(result.trace_report.deferred, 0);
+});
 test('deferred decisions alone do not block correction reuse', t => {
   const f = fixture(t);
   const ranges = [{ session_group: 'A', after: 0, end: 3, checkpoint_id: 1 }];
@@ -370,17 +384,17 @@ test('only an incompatible range is recollected beside a partially traced produc
   assert.equal(fetched.inbound.length, 1);
   assert.equal(fetched.inbound[0].session_group, 'B');
 });
-test('producer artifacts reuse only after clue selection, preferring committed over closed runs', t => {
+test('producer artifacts reuse only after clue selection and only this range\'s corrections', t => {
   const f = fixture(t);
-  const ranges = [{ session_group: 'A', after: 0, end: 3, checkpoint_id: 1 }, { session_group: 'B', after: 0, end: 4, checkpoint_id: 2 }];
+  const ranges = [{ session_group: 'A', after: 0, end: 3, checkpoint_id: 1 }, { session_group: 'B', after: 2, end: 4, checkpoint_id: 2 }];
   const dir = path.join(f.zylos, 'components/thinking-patterns/materials'); fs.mkdirSync(dir, { recursive: true });
   const correction = (group, id) => ({ session_group: group, c4_id: id, kind: 'correction' });
   const save = (id, extra) => fs.writeFileSync(path.join(dir, `${id}.json`), JSON.stringify({ schema_version: 1, run_id: id, created_at: new Date().toISOString(), filters: FILTERS, clues: [], traces: [], trace_complete: false, ...extra }));
-  // A: fetched but never traced. B: a closed run listed before the committed one.
+  // A: fetched but never traced. B: the producer also carried an older B clue (#2) from its own pending list.
   save('aaaa0001', { ranges: [ranges[0]] });
-  save('bbbb0001', { ranges: [ranges[1]], closed: true, trace_report: { clues: 0, deferred: 0 } });
-  save('bbbb0002', { ranges: [ranges[1]], committed: true, clues: [correction('B', 4)], traces: [{ clue: correction('B', 4), rows: [], report: { characters: 0 } }], trace_report: { clues: 1, deferred: 0 } });
+  save('bbbb0002', { ranges: [ranges[1]], clues: [correction('B', 2), correction('B', 4)], traces: [{ clue: correction('B', 4), rows: [], report: { characters: 0 } }], trace_report: { clues: 1, deferred: 1 }, deferred_clues: [correction('B', 2)] });
   f.set({ groups: ['A', 'B'], checkpoints: ranges.map(r => ({ id: r.checkpoint_id, session_group: r.session_group, end_conversation_id: r.end })), rows: [{ id: 2, session_group: 'A', channel: 'telegram', direction: 'in', timestamp: new Date().toISOString(), content: 'Correction' }] });
+  fs.writeFileSync(path.join(f.data, 'state.json'), JSON.stringify({ schema_version: 2, groups: { B: { end_conversation_id: 2, checkpoint_id: 0 } }, pending_clues: [] }));
   const fetched = f.invoke(['fetch']).value;
   assert.deepEqual(fetched.report.reuse_misses, [{ session_group: 'A', reason: 'clue_selection_unfinished' }]);
   assert.equal(fetched.report.reused_ranges, 1);

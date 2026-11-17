@@ -61,6 +61,7 @@ node scripts/reflect.js trace --run RUN --clues clues.json
 node scripts/reflect.js ledger append --file errors.json
 node scripts/reflect.js ledger list --type premature-conclusion
 node scripts/reflect.js ledger clean
+node scripts/reflect.js ledger cover --types '["premature-conclusion"]' --sha256 HASH --reason 'Identity already covers this behavior'
 node scripts/reflect.js write-identity --file proposal.md --sha256 HASH --types types.json
 node scripts/reflect.js rotation
 node scripts/reflect.js commit --run RUN --result no_change --groups groups.json
@@ -68,7 +69,9 @@ node scripts/reflect.js commit --run RUN --result no_change --groups groups.json
 
 Ledger entries contain only type, date, thread, C4 id, one short quote and
 absorption state. `ledger absorb --type TYPE` requires a successful identity-write
-receipt and applies only to evidence present at that write. Writer refusal leaves
+receipt and applies only to evidence present at that write. `ledger cover` closes
+eligible types the current identity already expresses, recording the reason and
+identity hash without writing. Writer refusal leaves
 the ledger intact; rotation refusal remains pending for retry. Old Core without
 the writer uses an explicitly reported legacy replacement.
 

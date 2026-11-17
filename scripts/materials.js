@@ -1,4 +1,4 @@
-// Checkpoint material collection and trace contract.
+// Shared material contract; copied verbatim (with reference-deltas.js) by both components.
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -103,9 +103,7 @@ export function collectMaterials(config, state = {}, options = {}) {
     // producer must have finished clue selection (trace records it, even for []).
     const sameRange = (options.reuse_artifacts ?? []).filter(a => a.ranges?.some(r => r.session_group === group && r.after === after && r.end === end));
     const sameFilters = sameRange.filter(a => JSON.stringify(a.filters) === JSON.stringify(filters));
-    const selected = sameFilters.filter(a => a.trace_report && !a.closed)
-      .sort((a, b) => Number(Boolean(b.committed)) - Number(Boolean(a.committed)) || String(b.created_at).localeCompare(String(a.created_at)));
-    const cached = selected[0];
+    const cached = sameFilters.find(a => a.trace_report);
     if (cached) {
       const source = cached.ranges.find(r => r.session_group === group && r.after === after && r.end === end);
       const within = c => c.session_group === group && c.kind === 'correction' && c.c4_id > after && c.c4_id <= end;
