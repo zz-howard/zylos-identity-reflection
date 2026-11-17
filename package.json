@@ -1,6 +1,6 @@
 {
   "name": "zylos-identity-reflection",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Periodic self-reflection component for zylos agents",
   "type": "module",
   "main": "scripts/reflect.js",
