@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Actions After Upgrading
 - Upgrade zylos-core to 1.0.0-beta.14 or later first. On an older Core, identity writes are refused (with the reason) and the error type stays pending until Core is upgraded.
+- If `~/zylos/components/identity-reflection/policy.md` was created by 0.2.0–0.4.0, it still describes the old 16384-byte limit and `memory_bytes`; replace that paragraph with the one in `hooks/setup.js` (the file is kept on upgrade, and the size check is enforced either way).
 
 ### Changed
 - The identity size limit now comes from Core's startup display limit (characters and estimated tokens, measured by zylos-memory `measureMemoryText`) instead of a fixed 16 KiB, which was larger than what startup can show. An over-limit proposal is refused before writing; at or above Core's 80% line it is written and the run reports a warning.

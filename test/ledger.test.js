@@ -48,9 +48,9 @@ function fixture(t) {
   const proposal = path.join(temporary, 'proposal.md');
   const typesFile = path.join(temporary, 'types.json');
   fs.writeFileSync(typesFile, '["unchecked-conclusion"]');
-  const replacementOf = (chars, unit = 'x') => original.replace('Old trait.', unit.repeat(chars - original.length + 'Old trait.'.length));
-  function writeArgs(chars, types = typesFile, unit = 'x') {
-    const replacement = replacementOf(chars, unit);
+  const replacementOf = chars => original.replace('Old trait.', 'x'.repeat(chars - original.length + 'Old trait.'.length));
+  function writeArgs(chars, types = typesFile) {
+    const replacement = replacementOf(chars);
     assert.equal(replacement.length, chars);
     fs.writeFileSync(proposal, replacement);
     return ['write-identity', '--file', proposal, '--sha256', crypto.createHash('sha256').update(original).digest('hex'), '--types', types];
@@ -64,9 +64,7 @@ test('Core decides the identity limit: the largest passing proposal is written a
   const f = fixture(t);
   const original = fs.readFileSync(f.identity, 'utf8');
   let largest = original.length;
-  while (measureMemoryText('identity.md', f.replacementOf(largest + 1)).status !== 'over') largest++;
-  // Negative control: the 16 KiB byte cap this replaces would have accepted the refused size.
-  assert.ok(largest + 1 < 16384);
+  while (measureMemoryText('identity.md', f.replacementOf(largest + 1)).status !== 'over') assert.ok(++largest < 100000, 'Core never reported over');
   const rejected = f.invoke(f.writeArgs(largest + 1));
   assert.equal(rejected.code, 1);
   assert.match(rejected.value.error, /exceeds the startup display limit/);
@@ -81,7 +79,6 @@ test('Core decides the identity limit: the largest passing proposal is written a
   const limits = measureMemoryText('identity.md', original);
   assert.deepEqual(accepted.value.memory_size, {
     limit: { chars: limits.maxChars, estimated_tokens: limits.maxTokens },
-    warning_from: { chars: Math.ceil(limits.warnThreshold.chars), estimated_tokens: Math.ceil(limits.warnThreshold.estimatedTokens) },
     identity_before: size(original), identity_proposed: size(f.replacementOf(largest)), identity_after: size(f.replacementOf(largest)) });
   assert.equal(accepted.value.memory_size.identity_after.status, 'warning');
   assert.equal(fs.readFileSync(f.identity, 'utf8'), f.replacementOf(largest));

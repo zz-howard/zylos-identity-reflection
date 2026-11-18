@@ -65,9 +65,8 @@ internal/system/void/multica.
 
 ## Ledger Evidence
 
-Identity writes report `memory_size`: Core's `limit` and `warning_from`
-(characters and estimated tokens), and `identity_before`, `identity_proposed`
-and `identity_after`, each as `{chars, estimated_tokens, status}` with status
+Identity writes report `memory_size`: Core's `limit` (characters and estimated
+tokens), and `identity_before`, `identity_proposed` and `identity_after`, each as `{chars, estimated_tokens, status}` with status
 `ok`, `warning` or `over`. Core's zylos-memory `measureMemoryText` (Core
 1.0.0-beta.14 or later) does all measuring; this component keeps no copy of the
 limit or the estimator. A proposal with status `over` is refused before the

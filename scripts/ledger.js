@@ -165,7 +165,6 @@ export async function loadIdentityMeasure(config) {
 }
 function sizeOf(measured) { return { chars: measured.chars, estimated_tokens: measured.estimatedTokens, status: measured.status }; }
 export function writeIdentity({ file, sha256, types }, config, measure) {
-  if (typeof measure !== 'function') throw new Error('Identity writes require Core\'s identity size check');
   eligibleTypes(types, config);
   const identity = fs.readFileSync(config.identity_file), replacement = fs.readFileSync(file);
   if (hash(identity) !== sha256) throw new Error('Identity hash changed; read and merge the current identity before retrying');
@@ -175,7 +174,6 @@ export function writeIdentity({ file, sha256, types }, config, measure) {
   const current = measure(identity.toString('utf8')), proposed = measure(replacement.toString('utf8'));
   const memorySize = {
     limit: { chars: proposed.maxChars, estimated_tokens: proposed.maxTokens },
-    warning_from: { chars: Math.ceil(proposed.warnThreshold.chars), estimated_tokens: Math.ceil(proposed.warnThreshold.estimatedTokens) },
     identity_before: sizeOf(current), identity_proposed: sizeOf(proposed), identity_after: sizeOf(current)
   };
   if (proposed.status === 'over') throw Object.assign(new Error(`Identity proposal exceeds the startup display limit (${proposed.chars} chars / ${proposed.estimatedTokens} estimated tokens; limit ${proposed.maxChars} / ${proposed.maxTokens}); merge existing traits before adding`), { memory_size: memorySize });
