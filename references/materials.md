@@ -65,12 +65,16 @@ internal/system/void/multica.
 
 ## Ledger Evidence
 
-Identity writes report `memory_bytes`: `identity_before`, `identity_proposed`,
-`identity_after`, `references`, `combined_before` and `combined_after` in bytes.
-Only proposed identity size above 16384 blocks writing; combined sizes never do.
-Deferred/rejected writes retain the original actual after size. Missing
-references counts as zero; an unavailable stat reports null combined values and
-`references_error`, without blocking the writer.
+Identity writes report `memory_size`: Core's `limit` and `warning_from`
+(characters and estimated tokens), and `identity_before`, `identity_proposed`
+and `identity_after`, each as `{chars, estimated_tokens, status}` with status
+`ok`, `warning` or `over`. Core's zylos-memory `measureMemoryText` (Core
+1.0.0-beta.14 or later) does all measuring; this component keeps no copy of the
+limit or the estimator. A proposal with status `over` is refused before the
+writer runs; `warning` is written and reported. If Core's check cannot be loaded
+or returns an unexpected result, identity writes are refused with the minimum
+Core version and the ledger stays unabsorbed. Deferred/rejected writes report the
+unchanged actual size. References has its own startup limit and is not counted.
 
 `ledger.jsonl` stores `{type,date,session_group,c4_id,quote,absorbed}`. Dates use
 the run's configured timezone. Quotes are single lines up to 500 characters.

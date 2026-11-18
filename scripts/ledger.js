@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { DATA_DIR, ZYLOS_DIR, STATE_PATH, loadState, writeJson } from './settings.js';
+import { pathToFileURL } from 'node:url';
+import { DATA_DIR, ZYLOS_DIR, STATE_PATH, MIN_CORE_VERSION, loadState, writeJson } from './settings.js';
 
 const ledgerPath = path.join(DATA_DIR, 'ledger.jsonl');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -148,24 +149,36 @@ export function recoverIdentityWrite(config) {
   writeJson(STATE_PATH, state);
   return { status: 'recovered' };
 }
-export function writeIdentity({ file, sha256, types }, config) {
+// Core owns the startup display limit for identity.md; this component keeps no copy.
+// Without Core's check there is no trustworthy limit, so identity writes are refused.
+export async function loadIdentityMeasure(config) {
+  const missing = reason => new Error(`Identity writes need zylos-core ${MIN_CORE_VERSION} or later; Core's identity size check is unavailable (${reason}). Identity left unchanged`);
+  let measure;
+  try { ({ measureMemoryText: measure } = await import(pathToFileURL(config.memory_budget).href)); }
+  catch (error) { throw missing(error.code || error.message); }
+  if (typeof measure !== 'function') throw missing('measureMemoryText is not exported');
+  return text => {
+    const result = measure('identity.md', text);
+    if (!['ok', 'warning', 'over'].includes(result?.status)) throw missing('unexpected measurement result');
+    return result;
+  };
+}
+function sizeOf(measured) { return { chars: measured.chars, estimated_tokens: measured.estimatedTokens, status: measured.status }; }
+export function writeIdentity({ file, sha256, types }, config, measure) {
+  if (typeof measure !== 'function') throw new Error('Identity writes require Core\'s identity size check');
   eligibleTypes(types, config);
   const identity = fs.readFileSync(config.identity_file), replacement = fs.readFileSync(file);
   if (hash(identity) !== sha256) throw new Error('Identity hash changed; read and merge the current identity before retrying');
   const before = section(identity.toString('utf8')), after = section(replacement.toString('utf8'));
   if (before.prefix !== after.prefix || before.suffix !== after.suffix) throw new Error('Only Personality & Behavioral Traits may change');
   if (before.body === after.body) throw new Error('Identity proposal has no personality changes');
-  let referencesBytes = null, referencesError;
-  try { referencesBytes = fs.statSync(path.join(ZYLOS_DIR, 'memory/references.md')).size; }
-  catch (error) { if (error.code === 'ENOENT') referencesBytes = 0; else referencesError = error.code; }
-  const memoryBytes = {
-    identity_before: identity.length, identity_proposed: replacement.length,
-    identity_after: identity.length, references: referencesBytes,
-    combined_before: referencesBytes === null ? null : identity.length + referencesBytes,
-    combined_after: referencesBytes === null ? null : identity.length + referencesBytes,
-    ...(referencesError ? { references_error: referencesError } : {})
+  const current = measure(identity.toString('utf8')), proposed = measure(replacement.toString('utf8'));
+  const memorySize = {
+    limit: { chars: proposed.maxChars, estimated_tokens: proposed.maxTokens },
+    warning_from: { chars: Math.ceil(proposed.warnThreshold.chars), estimated_tokens: Math.ceil(proposed.warnThreshold.estimatedTokens) },
+    identity_before: sizeOf(current), identity_proposed: sizeOf(proposed), identity_after: sizeOf(current)
   };
-  if (replacement.length > 16384) throw Object.assign(new Error('Identity exceeds its 16 KiB budget; merge existing traits'), { memory_bytes: memoryBytes });
+  if (proposed.status === 'over') throw Object.assign(new Error(`Identity proposal exceeds the startup display limit (${proposed.chars} chars / ${proposed.estimatedTokens} estimated tokens; limit ${proposed.maxChars} / ${proposed.maxTokens}); merge existing traits before adding`), { memory_size: memorySize });
   // Save the expected result before the writer so a stopped run can reconcile it.
   const state = loadState();
   const mode = fs.existsSync(config.memory_writer) ? 'core' : 'legacy';
@@ -185,11 +198,9 @@ export function writeIdentity({ file, sha256, types }, config) {
       outcome(rejected, 'rejected', mode, reason);
       writeJson(STATE_PATH, rejected);
       const recovered = recoverIdentityWrite(config);
-      const actual = fs.readFileSync(config.identity_file);
-      memoryBytes.identity_after = actual.length;
-      memoryBytes.combined_after = referencesBytes === null ? null : actual.length + referencesBytes;
-      if (recovered) return { status: 'updated', recovered: true, writer, rotation: retryRotation(config), memory_bytes: memoryBytes };
-      return { status: 'write_deferred', writer, ledger_preserved: true, memory_bytes: memoryBytes };
+      memorySize.identity_after = sizeOf(measure(fs.readFileSync(config.identity_file, 'utf8')));
+      if (recovered) return { status: 'updated', recovered: true, writer, rotation: retryRotation(config), memory_size: memorySize };
+      return { status: 'write_deferred', writer, ledger_preserved: true, memory_size: memorySize };
     }
   } else {
     const temporary = `${config.identity_file}.${process.pid}.tmp`;
@@ -199,7 +210,6 @@ export function writeIdentity({ file, sha256, types }, config) {
   }
   recoverIdentityWrite(config);
   const rotation = retryRotation(config);
-  memoryBytes.identity_after = replacement.length;
-  memoryBytes.combined_after = referencesBytes === null ? null : replacement.length + referencesBytes;
-  return { status: 'updated', writer, rotation, memory_bytes: memoryBytes };
+  memorySize.identity_after = sizeOf(proposed);
+  return { status: 'updated', writer, rotation, memory_size: memorySize };
 }

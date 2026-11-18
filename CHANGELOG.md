@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Actions After Upgrading
+- Upgrade zylos-core to 1.0.0-beta.14 or later first. On an older Core, identity writes are refused (with the reason) and the error type stays pending until Core is upgraded.
+
+### Changed
+- The identity size limit now comes from Core's startup display limit (characters and estimated tokens, measured by zylos-memory `measureMemoryText`) instead of a fixed 16 KiB, which was larger than what startup can show. An over-limit proposal is refused before writing; at or above Core's 80% line it is written and the run reports a warning.
+- `write-identity` reports `memory_size` (characters, estimated tokens and status before, proposed and after, plus Core's limit) in place of `memory_bytes`. References and combined sizes are no longer reported.
+- New config path `memory_budget` (defaults to Core's zylos-memory `memory-budget.js`).
+
 ## [0.4.0] - 2026-11-17
 
 ### Actions After Upgrading

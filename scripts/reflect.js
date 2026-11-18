@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { collectMaterials, traceMaterials, commitMaterials, saveArtifact, readArtifacts, materialFailureReason } from './materials.js';
 import { DATA_DIR, ZYLOS_DIR, loadConfig, loadState, writeJson, STATE_PATH } from './settings.js';
-import { appendErrors, listErrors, cleanLedger, absorbErrors, coverErrors, identityOutcomeForRun, writeIdentity, retryRotation, recoverIdentityWrite } from './ledger.js';
+import { appendErrors, listErrors, cleanLedger, absorbErrors, coverErrors, identityOutcomeForRun, writeIdentity, loadIdentityMeasure, retryRotation, recoverIdentityWrite } from './ledger.js';
 
 const MATERIAL_DIR = path.join(DATA_DIR, 'materials');
 
@@ -30,7 +30,7 @@ function artifact(id) {
   if (!found) throw new Error('Run artifact is unavailable; fetch first');
   return found;
 }
-function run() {
+async function run() {
   const command = process.argv[2], args = argsOf(process.argv.slice(3));
   const config = loadConfig();
   if (command === 'fetch' && config.enabled) { recoverIdentityWrite(config); cleanLedger(config); }
@@ -112,9 +112,9 @@ function run() {
     if (action === 'cover') return coverErrors({ types: listInput(args.types), sha256: args.sha256, reason: args.reason }, config);
     throw new Error('Usage: reflect.js ledger append --file JSON | list [--type TYPE] | absorb --type TYPE | cover --types TYPES --sha256 HASH --reason REASON | clean');
   }
-  if (command === 'write-identity') return writeIdentity({ file: args.file, sha256: args.sha256, types: listInput(args.types) }, config);
+  if (command === 'write-identity') return writeIdentity({ file: args.file, sha256: args.sha256, types: listInput(args.types) }, config, await loadIdentityMeasure(config));
   if (command === 'rotation') return retryRotation(config);
   throw new Error('Usage: reflect.js fetch | trace --clues FILE | commit --result RESULT | ledger ACTION | write-identity --file FILE --sha256 HASH --types FILE | rotation');
 }
-try { process.stdout.write(JSON.stringify(run(), null, 2) + '\n'); }
-catch (error) { process.exitCode = 1; process.stdout.write(JSON.stringify({ status: 'error', error: error.message, ...(error.memory_bytes ? { memory_bytes: error.memory_bytes } : {}) }) + '\n'); }
+try { process.stdout.write(JSON.stringify(await run(), null, 2) + '\n'); }
+catch (error) { process.exitCode = 1; process.stdout.write(JSON.stringify({ status: 'error', error: error.message, ...(error.memory_size ? { memory_size: error.memory_size } : {}) }) + '\n'); }

@@ -4,9 +4,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 
 const root = path.resolve(import.meta.dirname, '..');
+// Identity size limits come from the real Core checkout, never a copy here.
+assert.ok(process.env.ZYLOS_PACKAGE_ROOT, 'Set ZYLOS_PACKAGE_ROOT to a Core checkout with zylos-memory measureMemoryText');
+const coreBudget = path.join(fs.realpathSync(process.env.ZYLOS_PACKAGE_ROOT), 'skills/zylos-memory/scripts/memory-budget.js');
+const { measureMemoryText } = await import(pathToFileURL(coreBudget).href);
 // CLI integration uses private memory/state and fixture subprocesses only.
 // Run for ledger budgets, rotation reporting or argument parsing changes;
 // skip unrelated material collection changes. No daemon, tmux or DB starts.
@@ -27,7 +32,7 @@ function fixture(t) {
   fs.writeFileSync(identity, original);
   env.FIXTURE_CALLS = path.join(temporary, 'calls');
   const memoryCli = path.join(root, 'test/helpers/memory-fixture.js');
-  fs.writeFileSync(path.join(env.ZYLOS_DATA_DIR, 'config.json'), JSON.stringify({ memory_writer: memoryCli, rotation_script: memoryCli }));
+  fs.writeFileSync(path.join(env.ZYLOS_DATA_DIR, 'config.json'), JSON.stringify({ memory_writer: memoryCli, memory_budget: coreBudget, rotation_script: memoryCli }));
   function invoke(args, extra = {}) {
     for (const key of ['HOME', 'ZYLOS_DIR', 'ZYLOS_DATA_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR']) assert.ok(env[key].startsWith(temporary + path.sep));
     const child = spawnSync(process.execPath, [path.join(root, 'scripts/reflect.js'), ...args], { env: { ...env, ...extra }, encoding: 'utf8', timeout: 15000, maxBuffer: 1024 * 1024 });
@@ -43,61 +48,53 @@ function fixture(t) {
   const proposal = path.join(temporary, 'proposal.md');
   const typesFile = path.join(temporary, 'types.json');
   fs.writeFileSync(typesFile, '["unchecked-conclusion"]');
-  function writeArgs(bytes, types = typesFile) {
-    const replacement = original.replace('Old trait.', 'x'.repeat(bytes - Buffer.byteLength(original) + 'Old trait.'.length));
-    assert.equal(Buffer.byteLength(replacement), bytes);
+  const replacementOf = (chars, unit = 'x') => original.replace('Old trait.', unit.repeat(chars - original.length + 'Old trait.'.length));
+  function writeArgs(chars, types = typesFile, unit = 'x') {
+    const replacement = replacementOf(chars, unit);
+    assert.equal(replacement.length, chars);
     fs.writeFileSync(proposal, replacement);
     return ['write-identity', '--file', proposal, '--sha256', crypto.createHash('sha256').update(original).digest('hex'), '--types', types];
   }
-  return { invoke, writeArgs, env, memory, identity };
+  return { invoke, writeArgs, replacementOf, env, memory, identity };
 }
 
-test('identity budget accepts 16384 bytes independently of references and rejects one extra byte', t => {
+const size = text => { const m = measureMemoryText('identity.md', text); return { chars: m.chars, estimated_tokens: m.estimatedTokens, status: m.status }; };
+
+test('Core decides the identity limit: the largest passing proposal is written and one more character is refused', t => {
   const f = fixture(t);
-  fs.writeFileSync(path.join(f.memory, 'references.md'), 'r'.repeat(16384));
-  const original = fs.readFileSync(f.identity);
-  const rejected = f.invoke(f.writeArgs(16385));
+  const original = fs.readFileSync(f.identity, 'utf8');
+  let largest = original.length;
+  while (measureMemoryText('identity.md', f.replacementOf(largest + 1)).status !== 'over') largest++;
+  // Negative control: the 16 KiB byte cap this replaces would have accepted the refused size.
+  assert.ok(largest + 1 < 16384);
+  const rejected = f.invoke(f.writeArgs(largest + 1));
   assert.equal(rejected.code, 1);
-  assert.match(rejected.value.error, /Identity exceeds its 16 KiB budget/);
-  assert.equal(rejected.value.memory_bytes.identity_before, original.length);
-  assert.equal(rejected.value.memory_bytes.identity_proposed, 16385);
-  assert.equal(rejected.value.memory_bytes.identity_after, original.length);
-  assert.equal(rejected.value.memory_bytes.combined_after, original.length + 16384);
-  assert.ok(fs.readFileSync(f.identity).equals(original));
+  assert.match(rejected.value.error, /exceeds the startup display limit/);
+  assert.deepEqual(rejected.value.memory_size.identity_proposed, size(f.replacementOf(largest + 1)));
+  assert.equal(rejected.value.memory_size.identity_proposed.status, 'over');
+  assert.deepEqual(rejected.value.memory_size.identity_after, size(original));
+  assert.equal(fs.readFileSync(f.identity, 'utf8'), original);
   assert.equal(fs.existsSync(f.env.FIXTURE_CALLS), false);
-  const accepted = f.invoke(f.writeArgs(16384));
+  const accepted = f.invoke(f.writeArgs(largest));
   assert.equal(accepted.code, 0);
   assert.equal(accepted.value.status, 'updated');
-  assert.deepEqual(accepted.value.memory_bytes, { identity_before: original.length,
-    identity_proposed: 16384, identity_after: 16384, references: 16384,
-    combined_before: original.length + 16384, combined_after: 32768 });
-  assert.equal(fs.statSync(f.identity).size, 16384);
+  const limits = measureMemoryText('identity.md', original);
+  assert.deepEqual(accepted.value.memory_size, {
+    limit: { chars: limits.maxChars, estimated_tokens: limits.maxTokens },
+    warning_from: { chars: Math.ceil(limits.warnThreshold.chars), estimated_tokens: Math.ceil(limits.warnThreshold.estimatedTokens) },
+    identity_before: size(original), identity_proposed: size(f.replacementOf(largest)), identity_after: size(f.replacementOf(largest)) });
+  assert.equal(accepted.value.memory_size.identity_after.status, 'warning');
+  assert.equal(fs.readFileSync(f.identity, 'utf8'), f.replacementOf(largest));
 });
 
-test('busy identity writer reports unchanged actual bytes and the proposed size', t => {
-  const f = fixture(t), original = fs.readFileSync(f.identity);
-  const references = Buffer.from('\u4e2d'.repeat(100));
-  fs.writeFileSync(path.join(f.memory, 'references.md'), references);
+test('busy identity writer reports the unchanged actual size and the proposed size', t => {
+  const f = fixture(t), original = fs.readFileSync(f.identity, 'utf8');
   const result = f.invoke(f.writeArgs(200), { FIXTURE_SYNC_BUSY: '1' });
   assert.equal(result.code, 0);
   assert.equal(result.value.status, 'write_deferred');
-  assert.deepEqual(result.value.memory_bytes, { identity_before: original.length,
-    identity_proposed: 200, identity_after: original.length, references: references.length,
-    combined_before: original.length + references.length, combined_after: original.length + references.length });
-  assert.ok(fs.readFileSync(f.identity).equals(original));
-});
-
-test('unavailable references size is reported without blocking an identity write', t => {
-  const f = fixture(t);
-  fs.symlinkSync('references.md', path.join(f.memory, 'references.md'));
-  const result = f.invoke(f.writeArgs(200));
-  assert.equal(result.code, 0);
-  assert.equal(result.value.status, 'updated');
-  assert.equal(result.value.memory_bytes.identity_after, 200);
-  assert.equal(result.value.memory_bytes.references, null);
-  assert.equal(result.value.memory_bytes.combined_before, null);
-  assert.equal(result.value.memory_bytes.combined_after, null);
-  assert.equal(result.value.memory_bytes.references_error, 'ELOOP');
+  assert.deepEqual(result.value.memory_size.identity_proposed, size(f.replacementOf(200)));
+  assert.deepEqual(result.value.memory_size.identity_after, size(original));
+  assert.equal(fs.readFileSync(f.identity, 'utf8'), original);
 });
 
 test('rotation with only skipped targets stays pending and reports their reasons until enqueue succeeds', t => {
@@ -121,6 +118,5 @@ test('identity accepts inline type arrays and rejects empty types', t => {
   assert.match(invalid.value.error, /requires error types/);
   const accepted = f.invoke(f.writeArgs(200, '["unchecked-conclusion"]'));
   assert.equal(accepted.value.status, 'updated');
-  assert.equal(accepted.value.memory_bytes.references, 0);
-  assert.equal(accepted.value.memory_bytes.combined_after, 200);
+  assert.deepEqual(accepted.value.memory_size.identity_after, size(f.replacementOf(200)));
 });

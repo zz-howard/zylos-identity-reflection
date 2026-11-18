@@ -118,9 +118,11 @@ The subagent owns the actual reflection work:
    equivalent existing coverage; rewrite an existing trait when it is incomplete,
    misleading or contradicted by the repeated evidence.
    Prepare a complete replacement file, merging existing personality traits
-   before adding content. Keep all other sections byte-identical and keep identity
-   within its own 16 KiB (16384-byte) limit. Do not reject a write based on
-   identity plus references; combined size is reporting only.
+   before adding content. Keep all other sections byte-identical. Identity must
+   fit Core's startup display limit (characters and estimated tokens, measured by
+   Core's zylos-memory `measureMemoryText`); text beyond it would never be shown
+   at startup. `write-identity` refuses an over-limit proposal: merge or shorten
+   existing traits and retry. References has its own limit and is not counted.
    Never write the live identity directly. Run:
    `reflect.js write-identity --file <replacement> --sha256 <hash> --types '["error-type"]'`.
    `--types` also accepts a path to a JSON array file.
@@ -129,10 +131,13 @@ The subagent owns the actual reflection work:
    errors for the next run. Report `write_deferred` and rotation rejection; run
    `reflect.js rotation` next time if rotation remains pending. Legacy Core writer
    absence is explicitly reported when direct replacement is used. Include
-   `memory_bytes` in the run summary: identity before, proposed and actual after,
-   references, and combined before/after, all in bytes. A rejected/deferred write
-   reports unchanged actual after sizes. Missing references counts as zero;
-   unavailable references size is null with `references_error`, never a write gate.
+   `memory_size` in the run summary: identity before, proposed and actual after,
+   each as characters, estimated tokens and status, plus Core's limit. A
+   rejected/deferred write reports the unchanged actual size. When the written
+   identity's status is `warning` (at or above Core's 80% line), say so in the
+   report and suggest merging traits on a later run. If Core is older than
+   1.0.0-beta.14 and cannot measure size, the write is refused with that reason;
+   report it and leave the type pending.
 8. Run `reflect.js ledger clean` to remove types absent for 60 days. Commit only
    ranges actually reviewed using `reflect.js commit --run <run_id> --result
    no_change|updated --groups <comma-separated-completed-groups>`. A refused identity
