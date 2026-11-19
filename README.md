@@ -5,8 +5,9 @@
 <h1 align="center">zylos-identity-reflection</h1>
 
 Nightly reflection on repeated errors, using checkpoint-covered memory and C4
-context. Requires Node.js 20+ and comm-bridge/scheduler CLIs. No C4 database is
-opened by the component.
+context. Requires Node.js 20+ and comm-bridge/scheduler CLIs; identity writes
+require zylos-core 1.0.0-beta.14 or later (Core's zylos-memory size check). No C4
+database is opened by the component.
 
 ## Flow
 
@@ -41,10 +42,11 @@ Data lives in `~/zylos/components/identity-reflection`. Defaults include:
 }
 ```
 
-`identity_file`, `c4_db_cli`, `c4_fetch_cli`, `memory_writer`, `rotation_script`
+`identity_file`, `c4_db_cli`, `c4_fetch_cli`, `memory_writer`, `memory_budget`, `rotation_script`
 and `thinking_patterns_data_dir` default to the corresponding Zylos paths. Existing
 policy prose is preserved. The updated SKILL workflow and CLI enforce error
-thresholds, section boundaries and identity's own 16 KiB budget (references is separate).
+thresholds, section boundaries and Core's startup display limit for identity
+(references is separate).
 
 State schema 2 uses `groups[group].end_conversation_id` and `checkpoint_id`.
 Upgrading discards the old global cursor and old backlog, starting within the

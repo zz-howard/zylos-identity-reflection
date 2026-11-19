@@ -5,6 +5,8 @@ import os from 'node:os';
 export const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 export const DATA_DIR = process.env.ZYLOS_DATA_DIR || path.join(ZYLOS_DIR, 'components/identity-reflection');
 export const STATE_PATH = path.join(DATA_DIR, 'state.json');
+// First Core release whose zylos-memory exports measureMemoryText (zylos-core#1431).
+export const MIN_CORE_VERSION = '1.0.0-beta.14';
 export const DEFAULT_CONFIG = {
   enabled: true,
   identity_file: path.join(ZYLOS_DIR, 'memory/identity.md'),
@@ -19,6 +21,7 @@ export const DEFAULT_CONFIG = {
   ledger_min_dates: 2,
   ledger_expiry_days: 60,
   memory_writer: path.join(ZYLOS_DIR, '.claude/skills/zylos-memory/scripts/memory-write.js'),
+  memory_budget: path.join(ZYLOS_DIR, '.claude/skills/zylos-memory/scripts/memory-budget.js'),
   rotation_script: path.join(ZYLOS_DIR, '.claude/skills/zylos-memory/scripts/request-rotation.js')
 };
 export function expandHome(value) { return typeof value === 'string' && value.startsWith('~/') ? path.join(os.homedir(), value.slice(2)) : value; }
@@ -42,7 +45,7 @@ export function loadConfig() {
   const result = { ...DEFAULT_CONFIG, ...old };
   if (old.c4_fetch_script && !old.c4_fetch_cli) result.c4_fetch_cli = old.c4_fetch_script;
   for (const key of ['c4_db', 'c4_fetch_script', 'min_conversations', 'max_conversations', 'ledger_min_groups']) delete result[key];
-  for (const key of ['identity_file', 'c4_db_cli', 'c4_fetch_cli', 'thinking_patterns_data_dir', 'memory_writer', 'rotation_script']) result[key] = expandHome(result[key]);
+  for (const key of ['identity_file', 'c4_db_cli', 'c4_fetch_cli', 'thinking_patterns_data_dir', 'memory_writer', 'memory_budget', 'rotation_script']) result[key] = expandHome(result[key]);
   for (const key of ['ledger_min_dates', 'ledger_expiry_days']) if (!Number.isInteger(result[key]) || result[key] < 1) throw new Error(`Invalid ${key}`);
   return result;
 }

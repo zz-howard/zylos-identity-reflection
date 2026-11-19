@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 
-// Integration: actual reflection ledger -> real Core memory writer and lock ->
+// Integration: actual reflection ledger -> real Core size check, memory writer and lock ->
 // private memory files. The live-run observer is injected as a constant in the
 // public writer CLI API; no tmux server, service, network or runtime is touched.
 // Run when writer/ledger absorption changes; skip unrelated fetch/scheduler work.
@@ -36,7 +36,7 @@ test('real locked writer rejects active Sync and absorbs evidence only after pub
   fs.writeFileSync(writer, `import {runMemoryWriteCli} from ${JSON.stringify(coreWriter)}; process.exitCode=await runMemoryWriteCli(process.argv.slice(2), {currentRunId: async()=> 'fixture-run'});`);
   const rotation = path.join(root, 'rotation.mjs');
   fs.writeFileSync(rotation, `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(path.join(root, 'rotation-requested'))},process.argv.slice(2).join(' ')); console.log('OK: enqueued 1 rotation controls');`);
-  const config = { identity_file: identity, memory_writer: writer, rotation_script: rotation, ledger_min_dates: 2, ledger_expiry_days: 60 };
+  const config = { identity_file: identity, memory_writer: writer, memory_budget: path.join(core, 'skills/zylos-memory/scripts/memory-budget.js'), rotation_script: rotation, ledger_min_dates: 2, ledger_expiry_days: 60 };
   const markerDir = path.join(env.ZYLOS_DIR, 'activity-monitor/session-groups/origin');
   fs.mkdirSync(markerDir, { recursive: true });
   const marker = path.join(markerDir, 'sync.lock');
@@ -49,7 +49,7 @@ test('real locked writer rejects active Sync and absorbs evidence only after pub
     assert.equal(child.status, 0, (child.stdout + child.stderr).slice(0, 1000));
     return JSON.parse(child.stdout);
   }
-  const rejected = invoke(`ledger.appendErrors(${JSON.stringify(evidence)},config); console.log(JSON.stringify(ledger.writeIdentity(${JSON.stringify(options)},config)));`);
+  const rejected = invoke(`ledger.appendErrors(${JSON.stringify(evidence)},config); console.log(JSON.stringify(ledger.writeIdentity(${JSON.stringify(options)},config,await ledger.loadIdentityMeasure(config))));`);
   assert.equal(rejected.status, 'write_deferred');
   assert.match(rejected.writer.output, /SYNC_BUSY/);
   assert.equal(fs.readFileSync(identity, 'utf8'), original);
@@ -58,7 +58,7 @@ test('real locked writer rejects active Sync and absorbs evidence only after pub
   assert.equal(before.length, 2);
   assert.ok(before.every(row => !row.absorbed));
   fs.unlinkSync(marker);
-  const success = invoke(`console.log(JSON.stringify(ledger.writeIdentity(${JSON.stringify(options)},config)));`);
+  const success = invoke(`console.log(JSON.stringify(ledger.writeIdentity(${JSON.stringify(options)},config,await ledger.loadIdentityMeasure(config))));`);
   assert.equal(success.status, 'updated');
   assert.equal(success.rotation.status, 'rotation_requested');
   assert.equal(fs.readFileSync(identity, 'utf8'), fs.readFileSync(proposed, 'utf8'));

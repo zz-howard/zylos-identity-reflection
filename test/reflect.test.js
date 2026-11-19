@@ -10,6 +10,7 @@ const ROOT = path.resolve(import.meta.dirname, '..');
 const CLI = path.join(ROOT, 'scripts/reflect.js');
 const fixtureCli = path.join(ROOT, 'test/helpers/cli-fixture.js');
 const fixtureMemory = path.join(ROOT, 'test/helpers/memory-fixture.js');
+const fixtureBudget = path.join(ROOT, 'test/helpers/memory-budget-fixture.js');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 
 // These CLI integration cases run only private fixtures and temporary files.
@@ -28,7 +29,7 @@ function fixture(t, config = {}) {
   const identity = path.join(zylos, 'memory/identity.md');
   fs.writeFileSync(identity, '# Identity\n\n## Who I Am\nPiper\n\n## Personality & Behavioral Traits\nOld trait.\n\n## Principles\nCare.\n');
   const env = { ...process.env, HOME: home, ZYLOS_DIR: zylos, ZYLOS_DATA_DIR: data, PM2_HOME: path.join(home, 'pm2'), TMPDIR: path.join(home, 'tmp'), TMUX_TMPDIR: path.join(home, 'tmp'), FIXTURE_STATE: statePath, FIXTURE_CALLS: calls, TZ: 'UTC' };
-  fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ c4_db_cli: fixtureCli, c4_fetch_cli: fixtureCli, memory_writer: fixtureMemory, rotation_script: fixtureMemory, ...config }));
+  fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ c4_db_cli: fixtureCli, c4_fetch_cli: fixtureCli, memory_writer: fixtureMemory, memory_budget: fixtureBudget, rotation_script: fixtureMemory, ...config }));
   function invoke(args, extra = {}, script = CLI) {
     // Read back all process destinations before every invocation.
     for (const key of ['HOME', 'ZYLOS_DIR', 'ZYLOS_DATA_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR']) assert.ok(env[key].startsWith(home));
@@ -118,8 +119,25 @@ test('identity rejects stale hashes, outside-section changes, missing section an
   assert.match(f.invoke(args).value.error, /Only Personality/);
   fs.writeFileSync(file, original.replace('## Personality & Behavioral Traits', '## Other'));
   assert.match(f.invoke(args).value.error, /section is missing/);
-  fs.writeFileSync(file, original.replace('Verify evidence before concluding.', 'x'.repeat(17000)));
-  assert.match(f.invoke(args).value.error, /16 KiB/);
+  fs.writeFileSync(file, original.replace('Verify evidence before concluding.', 'x'.repeat(1000)));
+  assert.match(f.invoke(args).value.error, /exceeds the startup display limit .*merge existing traits/);
+});
+
+test('identity writes are refused with the minimum Core version when Core cannot measure size', t => {
+  for (const [name, source] of [['missing', null], ['no-export', 'export const other = 1;\n'], ['bad-shape', 'export const measureMemoryText = () => ({});\n']]) {
+    const f = fixture(t);
+    const budget = path.join(f.home, `${name}-budget.js`);
+    if (source !== null) fs.writeFileSync(budget, source);
+    fs.writeFileSync(path.join(f.data, 'config.json'), JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(f.data, 'config.json'))), memory_budget: budget }));
+    append(f, [errorRow('A', '2026-11-14', 10), errorRow('B', '2026-11-15', 11)]);
+    const before = fs.readFileSync(f.identity, 'utf8');
+    const result = f.invoke(proposal(f));
+    assert.equal(result.code, 1, name);
+    assert.match(result.value.error, /need zylos-core 1\.0\.0-beta\.14 or later.*Identity left unchanged/, name);
+    assert.equal(fs.readFileSync(f.identity, 'utf8'), before, name);
+    assert.equal(fs.readFileSync(f.calls, 'utf8'), '', name);
+    assert.ok(f.invoke(['ledger', 'list']).value.entries.every(row => !row.absorbed), name);
+  }
 });
 
 test('rotation rejection stays pending and legacy writer is explicitly reported', t => {

@@ -29,7 +29,7 @@ function fixture(t) {
   fs.writeFileSync(identity, original);
   const proposal = path.join(temporary, 'proposal.md'); fs.writeFileSync(proposal, replacement);
   env.FIXTURE_CALLS = path.join(temporary, 'calls');
-  const config = { memory_writer: path.join(root, 'test/helpers/memory-fixture.js'), rotation_script: path.join(root, 'test/helpers/memory-fixture.js') };
+  const config = { memory_writer: path.join(root, 'test/helpers/memory-fixture.js'), memory_budget: path.join(root, 'test/helpers/memory-budget-fixture.js'), rotation_script: path.join(root, 'test/helpers/memory-fixture.js') };
   fs.writeFileSync(path.join(env.ZYLOS_DATA_DIR, 'config.json'), JSON.stringify(config));
   const module = pathToFileURL(path.join(root, 'scripts/ledger.js')).href;
   const settings = pathToFileURL(path.join(root, 'scripts/settings.js')).href;
@@ -57,7 +57,7 @@ function fixture(t) {
     setState: value => fs.writeFileSync(stateFile, JSON.stringify({ schema_version: 2, ...value })),
     rows: () => fs.readFileSync(path.join(env.ZYLOS_DATA_DIR, 'ledger.jsonl'), 'utf8').trim().split('\n').map(JSON.parse),
     seed: () => run(`ledger.appendErrors(${JSON.stringify(evidence)},config);`),
-    write: extra => run(`console.log(JSON.stringify(ledger.writeIdentity(${JSON.stringify(options)},config)));`, extra)
+    write: extra => run(`console.log(JSON.stringify(ledger.writeIdentity(${JSON.stringify(options)},config,await ledger.loadIdentityMeasure(config))));`, extra)
   };
 }
 
